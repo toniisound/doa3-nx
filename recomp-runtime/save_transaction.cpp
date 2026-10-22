@@ -204,7 +204,10 @@ void sync_to_disk(const fs::path &path)
 {
 #if defined(__SWITCH__)
     // The console's SD filesystem cannot open a directory as a file; sync
-    // the file itself and leave the directory entry to the FAT driver.
+    // files only and leave directory entries to the FAT driver.
+    struct stat st;
+    require(stat(path.c_str(), &st) == 0);
+    if (S_ISDIR(st.st_mode)) return;
     const int fd = open(path.c_str(), O_RDONLY);
     require(fd >= 0);
     const bool synced = fsync(fd) == 0 || errno == ENOSYS || errno == EINVAL;
