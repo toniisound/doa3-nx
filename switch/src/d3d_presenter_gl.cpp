@@ -1324,8 +1324,11 @@ void flushSegment(RecompD3dPresenter *p)
 bool initEgl(RecompD3dPresenter *p)
 {
     NWindow *window = nwindowGetDefault();
+    std::fprintf(stderr, "[gl] window %ux%u\n", p->window_w, p->window_h);
     nwindowSetDimensions(window, p->window_w, p->window_h);
+    std::fprintf(stderr, "[gl] eglGetDisplay\n");
     p->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    std::fprintf(stderr, "[gl] eglInitialize\n");
     if (p->display == EGL_NO_DISPLAY || !eglInitialize(p->display, nullptr, nullptr)) {
         std::fprintf(stderr, "[gl] eglInitialize failed 0x%x\n", eglGetError());
         return false;
@@ -1339,10 +1342,12 @@ bool initEgl(RecompD3dPresenter *p)
     };
     EGLConfig config;
     EGLint count = 0;
+    std::fprintf(stderr, "[gl] eglChooseConfig\n");
     if (!eglChooseConfig(p->display, config_attributes, &config, 1, &count) || count == 0) {
         std::fprintf(stderr, "[gl] eglChooseConfig failed\n");
         return false;
     }
+    std::fprintf(stderr, "[gl] eglCreateWindowSurface\n");
     p->surface = eglCreateWindowSurface(p->display, config, window, nullptr);
     if (p->surface == EGL_NO_SURFACE) {
         std::fprintf(stderr, "[gl] eglCreateWindowSurface failed 0x%x\n", eglGetError());
@@ -1354,12 +1359,18 @@ bool initEgl(RecompD3dPresenter *p)
         EGL_CONTEXT_MINOR_VERSION_KHR, 3,
         EGL_NONE
     };
+    std::fprintf(stderr, "[gl] eglCreateContext 4.3 core\n");
     p->context = eglCreateContext(p->display, config, EGL_NO_CONTEXT, context_attributes);
     if (p->context == EGL_NO_CONTEXT) {
         std::fprintf(stderr, "[gl] eglCreateContext failed 0x%x\n", eglGetError());
         return false;
     }
-    eglMakeCurrent(p->display, p->surface, p->surface, p->context);
+    std::fprintf(stderr, "[gl] eglMakeCurrent\n");
+    if (!eglMakeCurrent(p->display, p->surface, p->surface, p->context)) {
+        std::fprintf(stderr, "[gl] eglMakeCurrent failed 0x%x\n", eglGetError());
+        return false;
+    }
+    std::fprintf(stderr, "[gl] gladLoadGL\n");
     if (!gladLoadGL()) {
         std::fprintf(stderr, "[gl] gladLoadGL failed\n");
         return false;
@@ -1515,6 +1526,7 @@ RecompD3dPresenterError gl_backend_create(const RecompD3dPresenterConfig *config
     allocate(p->uniform_buffer, kUniformRingBytes, GL_STREAM_DRAW);
     allocate(p->gamma_buffer, sizeof p->gamma_ramp, GL_DYNAMIC_DRAW);
 
+    std::fprintf(stderr, "[gl] compiling the present pass\n");
     const GLuint vs = compileShader(GL_VERTEX_SHADER, kPresentVertex, 0);
     const GLuint fs = compileShader(GL_FRAGMENT_SHADER, kPresentFragment, 0);
     p->present_program = (vs && fs) ? linkProgram(vs, fs, 0) : 0;
