@@ -33,6 +33,24 @@ typedef struct RecompWin32FileHandle {
 
 static RecompWin32FileHandle *open_file_handles = NULL;
 
+#ifdef __SWITCH__
+/* The console's SD driver reports no inode numbers and cannot open a
+   directory as a file. Handles are identified by their normalized path, and
+   a directory handle keeps fd -1 and stats its path. */
+#define SAME_HANDLE_FILE(cur, st, norm) (strcmp((cur)->path, (norm)) == 0)
+static int handle_stat(const RecompWin32FileHandle *h, struct stat *st)
+{
+    return h->fd >= 0 ? fstat(h->fd, st) : stat(h->path, st);
+}
+#else
+#define SAME_HANDLE_FILE(cur, st, norm) \
+    ((cur)->dev == (st).st_dev && (cur)->ino == (st).st_ino)
+static int handle_stat(const RecompWin32FileHandle *h, struct stat *st)
+{
+    return fstat(h->fd, st);
+}
+#endif
+
 typedef struct RecompFindHandle {
     struct dirent **entries;
     int count;
@@ -276,7 +294,7 @@ HANDLE CreateFileA(
         bool wants_delete = (dwDesiredAccess & DELETE) != 0;
 
         for (RecompWin32FileHandle *cur = open_file_handles; cur != NULL; cur = cur->next) {
-            if (cur->dev == existing_st.st_dev && cur->ino == existing_st.st_ino) {
+            if (SAME_HANDLE_FILE(cur, existing_st, norm)) {
                 if (wants_read && !(cur->share & FILE_SHARE_READ)) {
                     last_error = 32; // ERROR_SHARING_VIOLATION
                     return INVALID_HANDLE_VALUE;
@@ -347,7 +365,16 @@ HANDLE CreateFileA(
             fd = open(norm, O_RDONLY);
         }
     }
+#ifdef __SWITCH__
+    bool directory_without_fd = false;
+    if (fd < 0 && (dwFlagsAndAttributes & FILE_FLAG_BACKUP_SEMANTICS) != 0 &&
+        stat(norm, &existing_st) == 0 && S_ISDIR(existing_st.st_mode)) {
+        directory_without_fd = true;
+    }
+    if (fd < 0 && !directory_without_fd) {
+#else
     if (fd < 0) {
+#endif
         set_last_error_for_path(norm);
         return INVALID_HANDLE_VALUE;
     }
@@ -364,7 +391,7 @@ HANDLE CreateFileA(
     h->flags = dwFlagsAndAttributes;
     
     struct stat st;
-    h->is_dir = (fstat(fd, &st) == 0 && S_ISDIR(st.st_mode));
+    h->is_dir = (handle_stat(h, &st) == 0 && S_ISDIR(st.st_mode));
     h->dev = st.st_dev;
     h->ino = st.st_ino;
     h->access = dwDesiredAccess;
@@ -588,7 +615,7 @@ BOOL GetFileSizeEx(
     }
     RecompWin32FileHandle *h = (RecompWin32FileHandle *)hFile;
     struct stat st;
-    if (fstat(h->fd, &st) != 0) {
+    if (handle_stat(h, &st) != 0) {
         set_last_error_from_errno();
         return FALSE;
     }
@@ -987,7 +1014,7 @@ BOOL GetFileInformationByHandleEx(
             return FALSE;
         }
         struct stat st;
-        if (fstat(h->fd, &st) != 0) {
+        if (handle_stat(h, &st) != 0) {
             set_last_error_from_errno();
             return FALSE;
         }
@@ -1024,7 +1051,7 @@ BOOL SetFileInformationByHandle(
         }
         FILE_BASIC_INFO *info = (FILE_BASIC_INFO *)lpFileInformation;
         struct stat st;
-        if (fstat(h->fd, &st) != 0) {
+        if (handle_stat(h, &st) != 0) {
             set_last_error_from_errno();
             return FALSE;
         }
