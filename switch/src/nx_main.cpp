@@ -19,6 +19,7 @@
 #include <pthread.h>
 
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -135,6 +136,16 @@ static void redirectStderrToLog()
     log_devoptab.name = "doa3log";
     log_devoptab.write_r = logWrite;
     devoptab_list[STD_ERR] = &log_devoptab;
+}
+
+void doa3_nx_log_raw(const char *text, size_t length)
+{
+    if (log_fd >= 0) write(log_fd, text, length);
+}
+
+bool doa3_nx_console_ready(void)
+{
+    return console_ready;
 }
 
 // libnx calls these around main.
@@ -303,7 +314,15 @@ int main(int argc, char **argv)
     static char arg2[sizeof kRunnerXbe];
     std::memcpy(arg2, kRunnerXbe, sizeof kRunnerXbe);
     char *runner_argv[] = {arg0, arg1, arg2, nullptr};
-    const int code = recomp_runner_main(3, runner_argv);
+    int code = 1;
+    try {
+        code = recomp_runner_main(3, runner_argv);
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "[nx] uncaught exception: %s\n", error.what());
+        std::printf("\n\x1b[31mExcepcion: %s\x1b[0m\n", error.what());
+        waitForPlus();
+        return 1;
+    }
     std::fprintf(stderr, "[nx] runner returned %d\n", code);
     return code;
 }
