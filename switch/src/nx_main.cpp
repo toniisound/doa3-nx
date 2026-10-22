@@ -18,10 +18,7 @@
 
 #include <pthread.h>
 
-#include "xbe_parser.h"
-
 #include <cstdio>
-#include <filesystem>
 #include <exception>
 #include <cstdlib>
 #include <cstring>
@@ -50,7 +47,6 @@ const char kLog[] = "sdmc:/switch/doa3-nx/doa3-nx.log";
 const char kRunnerXbe[] = "/switch/doa3-nx/disc/default.xbe";
 
 bool console_ready = false;
-bool cpu_boosted = false;
 
 bool fileExists(const char *path)
 {
@@ -217,7 +213,6 @@ void userAppInit(void)
 
 void userAppExit(void)
 {
-    if (cpu_boosted) appletSetCpuBoostMode(ApmCpuBoostMode_Normal);
     std::fflush(stderr);
     if (log_fd >= 0) {
         flushLog();
@@ -242,30 +237,34 @@ int __wrap_setvbuf(FILE *stream, char *buffer, int mode, size_t size)
 }
 
 // libnx starts every pthread (std::thread included) on the main thread's
-// core. The guest runs on the main thread and never yields, so host helper
-// threads (DirectSound, vblank, log flushing) move to cores 1 and 2.
+// core. The guest runs on the main thread (core 0) and never yields, so host
+// threads move off it: the render thread asks for core 1, which it then has to
+// itself, and the rest (DirectSound's voice pump) join the audio mixer on core 2.
+static int next_thread_core = -1;
+
+void doa3_nx_set_next_thread_core(int core)
+{
+    next_thread_core = core;
+}
+
 int __real_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     void *(*start)(void *), void *arg);
 int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     void *(*start)(void *), void *arg)
 {
-    std::fprintf(stderr, "[nx] pthread_create...\n");
     const int rc = __real_pthread_create(thread, attr, start, arg);
-    std::fprintf(stderr, "[nx] pthread_create rc=%d\n", rc);
+    const int requested = next_thread_core;
+    next_thread_core = -1;
     if (rc != 0 || thread == nullptr) return rc;
-    static unsigned next_core = 1;
     u64 mask = 0;
     if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0))) return rc;
-    mask &= ~1ull; // keep core 0 for the guest
-    if (mask == 0) return rc;
-    unsigned core = next_core;
-    for (int tries = 0; tries < 4 && !(mask & (1ull << core)); ++tries) core = core % 3u + 1u;
-    next_core = core % 2u + 1u;
+    unsigned core = requested >= 0 ? static_cast<unsigned>(requested) : 2u;
+    if (!(mask & (1ull << core))) core = (mask & 2ull) ? 1u : 0u;
     // pthread_t is libnx's struct __pthread_t*, whose first member is a Thread
     // and whose first field is the kernel handle.
     const Handle handle = *reinterpret_cast<const Handle *>(*thread);
-    const Result moved = svcSetThreadCoreMask(handle, (s32)core, (u32)mask);
-    std::fprintf(stderr, "[nx] host thread -> core %u (0x%x)\n", core, (unsigned)moved);
+    svcSetThreadCoreMask(handle, static_cast<s32>(core), 1u << core);
+    std::fprintf(stderr, "[nx] host thread on core %u\n", core);
     return rc;
 }
 
@@ -278,6 +277,19 @@ void doa3_nx_presenter_took_console(void)
     mutexLock(&console_mutex);
     presenter_owns_console = true;
     mutexUnlock(&console_mutex);
+}
+
+// The OpenGL presenter needs the window the text console draws to.
+void doa3_nx_release_console(void)
+{
+    mutexLock(&console_mutex);
+    presenter_owns_console = true;
+    if (console_ready) {
+        consoleExit(nullptr);
+        console_ready = false;
+    }
+    mutexUnlock(&console_mutex);
+    std::fprintf(stderr, "[nx] text console released for the renderer\n");
 }
 
 static Thread heartbeat_thread;
@@ -343,7 +355,8 @@ int main(int argc, char **argv)
     }
 
     // Held at boot: R runs unpaced (as fast as the CPU allows, to measure
-    // headroom above 60 fps); L keeps the CPU at its normal clock.
+    // headroom above 60 fps). There is no CPU boost: boost mode would drop the
+    // GPU to 76.8 MHz. Clock the console with sys-clk instead.
     PadState pad;
     padInitializeDefault(&pad);
     padUpdate(&pad);
@@ -352,14 +365,7 @@ int main(int argc, char **argv)
         setenv("RECOMP_UNPACED", "1", 1);
         std::fprintf(stderr, "[nx] RECOMP_UNPACED=1 (R held at boot)\n");
     }
-    if (!(held & HidNpadButton_L)) {
-        // 1785 MHz CPU while no GPU work is submitted; the GPU backend will
-        // revisit this, since boost mode lowers the GPU clock.
-        cpu_boosted = R_SUCCEEDED(appletSetCpuBoostMode(ApmCpuBoostMode_FastLoad));
-    }
-    std::fprintf(stderr, "[nx] cpu boost %s\n", cpu_boosted ? "on" : "off");
-    std::printf("CPU boost: %s   Modo: %s\n", cpu_boosted ? "si (1785 MHz)" : "no",
-        (held & HidNpadButton_R) ? "sin limite (unpaced)" : "60 Hz");
+    std::printf("Modo: %s\n", (held & HidNpadButton_R) ? "sin limite (unpaced)" : "60 Hz");
     std::printf("Arrancando...\n");
     consoleUpdate(nullptr);
     mutexInit(&console_mutex);
@@ -375,25 +381,6 @@ int main(int argc, char **argv)
     static char arg2[sizeof kRunnerXbe];
     std::memcpy(arg2, kRunnerXbe, sizeof kRunnerXbe);
     char *runner_argv[] = {arg0, arg1, arg2, nullptr};
-    // Preflight: the steps the runner takes before its first log line,
-    // traced one by one, so a failure here names its step.
-    try {
-        std::fprintf(stderr, "[nx] preflight: getcwd\n");
-        char cwd[512] = {};
-        std::fprintf(stderr, "[nx] cwd=%s\n", getcwd(cwd, sizeof cwd) ? cwd : "(fail)");
-        std::fprintf(stderr, "[nx] preflight: filesystem::absolute\n");
-        const std::filesystem::path absolute = std::filesystem::absolute(kRunnerXbe);
-        std::fprintf(stderr, "[nx] absolute=%s parent=%s\n", absolute.string().c_str(),
-            absolute.parent_path().string().c_str());
-        std::fprintf(stderr, "[nx] preflight: parse xbe\n");
-        doaxbv::XbeParser parser;
-        const doaxbv::XbeParseResult parsed = parser.parse(kRunnerXbe);
-        std::fprintf(stderr, "[nx] parse ok=%d size=%llu sha256=%s\n", parsed.ok() ? 1 : 0,
-            (unsigned long long)parsed.metadata.fileSize, parsed.metadata.fileSha256.c_str());
-    } catch (const std::exception &error) {
-        std::fprintf(stderr, "[nx] preflight exception: %s\n", error.what());
-    }
-
     doa3_nx_profile_start();
     int code = 1;
     try {

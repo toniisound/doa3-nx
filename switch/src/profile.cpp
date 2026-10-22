@@ -270,6 +270,14 @@ void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row)
         lookup_ms * per_frame, (unsigned long long)(lookup_calls / frames), idle_ms * per_frame,
         (unsigned long long)lost_scopes, top);
 
+    if (console_row < 0) {
+        for (int i = 0; i < slot_count; ++i) {
+            slots[i].ticks = 0;
+            slots[i].calls = 0;
+        }
+        idle_ticks = lookup_ticks = lookup_calls = 0;
+        return;
+    }
     std::printf("\x1b[%d;1H", console_row);
     std::printf("Por frame:  juego %5.2f ms   adaptadores %5.2f ms\x1b[K\n",
         game_ms * per_frame, adapter_ms * per_frame);
