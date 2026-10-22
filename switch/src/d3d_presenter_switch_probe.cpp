@@ -18,6 +18,7 @@
 #include <new>
 
 extern "C" void doa3_nx_presenter_took_console(void); // nx_main.cpp
+extern "C" void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row); // profile.cpp
 
 struct RecompD3dPresenter {
     uint32_t width = 0;
@@ -101,6 +102,7 @@ void reportPerformance(RecompD3dPresenter *p)
         (unsigned long long)p->draw_count,
         (unsigned long long)p->textured_draw_count,
         (unsigned long long)p->program_draw_count);
+    doa3_nx_profile_report(frames, elapsed_ms, 16);
     consoleUpdate(nullptr);
 
     p->second_presents = 1u;

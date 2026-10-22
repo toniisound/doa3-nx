@@ -221,6 +221,7 @@ add_executable(doa3-nx
     "${NX_SRC}/switch_shims.c"
     "${NX_SRC}/boot_trace.cpp"
     "${NX_SRC}/crash_report.cpp"
+    "${NX_SRC}/profile.cpp"
     "${NX_SRC}/input_host_switch.c"
     "${NX_SRC}/audio_output_null.cpp"
     "${NX_SRC}/d3d_presenter_switch_probe.cpp"
@@ -248,7 +249,10 @@ set_source_files_properties(${_recomp_program_sources} PROPERTIES
 target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=abort" "-Wl,--wrap=setvbuf" "-Wl,--wrap=pthread_create"
     "-Wl,--wrap=recomp_install_host_diagnostics" "-Wl,--wrap=recomp_save_initialize"
     "-Wl,--wrap=recomp_runtime_init" "-Wl,--wrap=recomp_music_initialize"
-    "-Wl,--wrap=recomp_dispatch" "-Wl,--wrap=recomp_stop_note_kernel_call" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
+    "-Wl,--wrap=recomp_dispatch"
+    "-Wl,--wrap=recomp_lookup_manual" "-Wl,--wrap=recomp_lookup_kernel"
+    "-Wl,--wrap=recomp_program_lookup" "-Wl,--wrap=recomp_native_fiber_switch"
+    "-Wl,--wrap=nanosleep" "-Wl,--wrap=recomp_stop_note_kernel_call" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
 target_link_libraries(doa3-nx PRIVATE nx m)
 
 nx_generate_nacp(OUTPUT doa3-nx.nacp

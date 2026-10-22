@@ -282,6 +282,7 @@ void doa3_nx_presenter_took_console(void)
 
 static Thread heartbeat_thread;
 uint64_t doa3_nx_kernel_calls(void); // boot_trace.cpp
+void doa3_nx_profile_start(void);     // profile.cpp
 
 static void heartbeat(void *arg)
 {
@@ -393,6 +394,7 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "[nx] preflight exception: %s\n", error.what());
     }
 
+    doa3_nx_profile_start();
     int code = 1;
     try {
         code = recomp_runner_main(3, runner_argv);
