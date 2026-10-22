@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <unistd.h>
 #endif
 
@@ -99,11 +100,25 @@ bool exists_plain(const fs::path &path)
        emulators accept it), so the root counts as present. */
     if (path == path.root_path()) return true;
     struct stat st;
-    if (stat(path.c_str(), &st) != 0) {
-        require(errno == ENOENT || errno == ENOTDIR);
-        return false;
+    if (stat(path.c_str(), &st) == 0) return true;
+    if (errno == ENOENT || errno == ENOTDIR) return false;
+    /* The driver reports EIO for some paths stat cannot classify; probe them
+       by opening instead, and log which path it was. */
+    const int stat_errno = errno;
+    bool present = false;
+    if (DIR *dir = opendir(path.c_str())) {
+        closedir(dir);
+        present = true;
+    } else {
+        const int fd = open(path.c_str(), O_RDONLY);
+        if (fd >= 0) {
+            close(fd);
+            present = true;
+        }
     }
-    return true;
+    std::fprintf(stderr, "save path stat errno %d: '%s' (%s by open)\n",
+        stat_errno, path.c_str(), present ? "present" : "absent");
+    return present;
 #else
     std::error_code ec;
     auto status = fs::symlink_status(path, ec);
