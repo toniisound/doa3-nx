@@ -178,7 +178,9 @@ int __real_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     void *(*start)(void *), void *arg)
 {
+    std::fprintf(stderr, "[nx] pthread_create...\n");
     const int rc = __real_pthread_create(thread, attr, start, arg);
+    std::fprintf(stderr, "[nx] pthread_create rc=%d\n", rc);
     if (rc != 0 || thread == nullptr) return rc;
     static unsigned next_core = 1;
     u64 mask = 0;
@@ -191,7 +193,8 @@ int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     // pthread_t is libnx's struct __pthread_t*, whose first member is a Thread
     // and whose first field is the kernel handle.
     const Handle handle = *reinterpret_cast<const Handle *>(*thread);
-    svcSetThreadCoreMask(handle, (s32)core, (u32)mask);
+    const Result moved = svcSetThreadCoreMask(handle, (s32)core, (u32)mask);
+    std::fprintf(stderr, "[nx] host thread -> core %u (0x%x)\n", core, (unsigned)moved);
     return rc;
 }
 
