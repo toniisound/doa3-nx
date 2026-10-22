@@ -215,6 +215,20 @@ set(_runtime_sources
     win32_compat.c fiber_switch_arm64.S)
 list(TRANSFORM _runtime_sources PREPEND "${RUNTIME}/")
 
+# gl: OpenGL renderer on its own thread (default). probe: no rendering, the
+# CPU-only measuring presenter from stage 1.
+set(DOA3_NX_PRESENTER "gl" CACHE STRING "Presenter backend: gl or probe")
+if(DOA3_NX_PRESENTER STREQUAL "probe")
+    set(DOA3_NX_PRESENTER_SOURCES "${NX_SRC}/d3d_presenter_switch_probe.cpp")
+    set(DOA3_NX_PRESENTER_LIBS)
+else()
+    set(DOA3_NX_PRESENTER_SOURCES
+        "${NX_SRC}/d3d_presenter_gl.cpp"
+        "${NX_SRC}/d3d_presenter_gl_thread.cpp")
+    # devkitPro switch-mesa and switch-glad (switch-portlibs).
+    set(DOA3_NX_PRESENTER_LIBS glad EGL glapi drm_nouveau)
+endif()
+
 add_executable(doa3-nx
     ${_runtime_sources}
     "${NX_SRC}/nx_main.cpp"
@@ -224,7 +238,7 @@ add_executable(doa3-nx
     "${NX_SRC}/profile.cpp"
     "${NX_SRC}/input_host_switch.c"
     "${NX_SRC}/audio_output_switch.cpp"
-    "${NX_SRC}/d3d_presenter_switch_probe.cpp"
+    ${DOA3_NX_PRESENTER_SOURCES}
     "${_missing_source}"
     ${_recomp_program_sources}
     "${XBE_DIR}/sha.cpp"
@@ -253,7 +267,8 @@ target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=abort" "-Wl,--
     "-Wl,--wrap=recomp_lookup_manual" "-Wl,--wrap=recomp_lookup_kernel"
     "-Wl,--wrap=recomp_program_lookup" "-Wl,--wrap=recomp_native_fiber_switch"
     "-Wl,--wrap=nanosleep" "-Wl,--wrap=recomp_stop_note_kernel_call" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
-target_link_libraries(doa3-nx PRIVATE nx m)
+target_include_directories(doa3-nx SYSTEM PRIVATE "${DEVKITPRO}/portlibs/switch/include")
+target_link_libraries(doa3-nx PRIVATE ${DOA3_NX_PRESENTER_LIBS} nx m)
 
 nx_generate_nacp(OUTPUT doa3-nx.nacp
     NAME "DOA3 NX"

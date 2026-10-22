@@ -11,23 +11,27 @@ homebrew `.nro`.
 
 ## Status
 
-**Stage 1 — CPU bring-up.** The whole lifted program runs on the console, but
-the presenter draws nothing (audio plays): the screen shows the guest frame
-rate, draws per frame and frame times. This stage measures whether the
-console's CPU can run the game at 60 fps before the GPU backend is written.
+**Stage 2 — renderer bring-up.** The whole lifted program runs on the console
+with audio, and an OpenGL renderer (mesa/nouveau through EGL) on core 1 draws
+what the game submits: a port of the project's SDL_GPU presenter with the same
+texture cache, render targets, generated shaders and uniform layout. The game
+thread records each frame and the render thread replays it, so drawing does not
+cost the game's core. Expect visual bugs while the renderer is checked against
+the PC build.
 
 | Area | Switch host layer | State |
 |---|---|---|
 | Lifted program + runtime | shared with doa3-re (`recomp-runtime/`) | builds for AArch64 |
 | Fibers | `fiber_switch_arm64.S` (shared) | — |
-| Video | `switch/src/d3d_presenter_switch_probe.cpp` | probe only (no rendering) |
+| Video | `switch/src/d3d_presenter_gl.cpp` + `d3d_presenter_gl_thread.cpp` (OpenGL 4.3, render thread on core 1) | in progress |
 | Audio | `switch/src/audio_output_switch.cpp` (audout, mixer on core 2) | on |
 | Input | `switch/src/input_host_switch.c` (libnx pads, rumble) | 4 ports |
 | Files and saves | `win32_compat.c` + `switch/include` shims | SD card |
 
 ## Building
 
-Requirements: Linux or WSL with devkitPro (`switch-dev`), CMake 3.20+,
+Requirements: Linux or WSL with devkitPro (`switch-dev`, plus `switch-mesa` and
+`switch-glad` from `switch-portlibs`), CMake 3.20+,
 Ninja (optional) and everything `../docs/building.md` lists for the Linux
 build.
 
@@ -60,8 +64,9 @@ Start it from the homebrew menu, preferably through a game (title takeover)
 for the full memory budget. Saves go to `disc/.recomp-storage`, and each boot
 rewrites `sdmc:/switch/doa3-nx/doa3-nx.log`.
 
-Held at launch: **R** runs unpaced (as fast as the CPU allows), **L** keeps
-the CPU at its normal clock instead of boost mode (1785 MHz).
+Held at launch, **R** runs unpaced (as fast as the CPU allows). The CPU is not
+boosted by the app, since boost mode slows the GPU; use sys-clk to raise the
+CPU clock. `-DDOA3_NX_PRESENTER=probe` builds the stage 1 CPU-only presenter.
 
 Controls: Switch B/A/Y/X are Xbox A/B/X/Y by position; L/R are Black/White,
 ZL/ZR the triggers, + is START and - is BACK. Quit with HOME or
