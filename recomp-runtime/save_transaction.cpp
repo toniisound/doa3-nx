@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -68,6 +69,18 @@ void require(bool condition)
 {
     if (!condition) throw std::runtime_error("invalid save journal or path");
 }
+#ifdef __SWITCH__
+/* Name the failing check: the console cannot attach a debugger to find it. */
+void require_at(bool condition, int line, const char *text)
+{
+    if (!condition) {
+        std::fprintf(stderr, "save check failed at save_transaction.cpp:%d: %s (errno %d)\n",
+            line, text, errno);
+        throw std::runtime_error("invalid save journal or path");
+    }
+}
+#define require(condition) require_at((condition), __LINE__, #condition)
+#endif
 
 bool exists_plain(const fs::path &path)
 {
@@ -79,6 +92,14 @@ bool exists_plain(const fs::path &path)
         return false;
     }
     require((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+    return true;
+#elif defined(__SWITCH__)
+    /* The SD card's FAT has no links; plain stat, since lstat is not wired up. */
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        require(errno == ENOENT || errno == ENOTDIR);
+        return false;
+    }
     return true;
 #else
     std::error_code ec;
