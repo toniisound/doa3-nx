@@ -219,6 +219,7 @@ add_executable(doa3-nx
     ${_runtime_sources}
     "${NX_SRC}/nx_main.cpp"
     "${NX_SRC}/switch_shims.c"
+    "${NX_SRC}/boot_trace.cpp"
     "${NX_SRC}/input_host_switch.c"
     "${NX_SRC}/audio_output_null.cpp"
     "${NX_SRC}/d3d_presenter_switch_probe.cpp"
@@ -243,7 +244,10 @@ set_source_files_properties("${RUNTIME}/runner.cpp" PROPERTIES
 # while still giving the register allocation the lifted code needs.
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
     COMPILE_OPTIONS "-O2;-w")
-target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=setvbuf" "-Wl,--wrap=pthread_create" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
+target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=setvbuf" "-Wl,--wrap=pthread_create"
+    "-Wl,--wrap=recomp_install_host_diagnostics" "-Wl,--wrap=recomp_save_initialize"
+    "-Wl,--wrap=recomp_runtime_init" "-Wl,--wrap=recomp_music_initialize"
+    "-Wl,--wrap=recomp_dispatch" "-Wl,--wrap=recomp_stop_note_kernel_call" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
 target_link_libraries(doa3-nx PRIVATE nx m)
 
 nx_generate_nacp(OUTPUT doa3-nx.nacp
