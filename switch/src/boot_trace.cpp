@@ -23,12 +23,13 @@ uint64_t doa3_nx_kernel_calls(void)
     return kernel_calls.load(std::memory_order_relaxed);
 }
 
-void __real_recomp_install_host_diagnostics(void);
+// The desktop version gives stderr a 64 KiB buffer and starts a thread that
+// flushes it. On the console stderr is line-buffered instead (nx_main.cpp),
+// so the flush thread is not needed: skip it, it never returned here.
 void __wrap_recomp_install_host_diagnostics(void)
 {
-    std::fprintf(stderr, "[boot] host diagnostics\n");
-    __real_recomp_install_host_diagnostics();
-    std::fprintf(stderr, "[boot] host diagnostics ok\n");
+    std::setvbuf(stderr, nullptr, _IOLBF, 1 << 12);
+    std::fprintf(stderr, "[boot] host diagnostics (Switch: line-buffered stderr)\n");
 }
 
 bool __real_recomp_save_initialize(const char *disc_root);
