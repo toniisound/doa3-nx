@@ -243,7 +243,7 @@ set_source_files_properties("${RUNTIME}/runner.cpp" PROPERTIES
 # while still giving the register allocation the lifted code needs.
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
     COMPILE_OPTIONS "-O2;-w")
-target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
+target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=setvbuf" "-Wl,--wrap=pthread_create" "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/doa3-nx.map")
 target_link_libraries(doa3-nx PRIVATE nx m)
 
 nx_generate_nacp(OUTPUT doa3-nx.nacp
