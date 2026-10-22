@@ -94,7 +94,10 @@ bool exists_plain(const fs::path &path)
     require((attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
     return true;
 #elif defined(__SWITCH__)
-    /* The SD card's FAT has no links; plain stat, since lstat is not wired up. */
+    /* The SD card's FAT has no links; plain stat, since lstat is not wired up.
+       The console's SD driver fails stat on the volume root with EIO (the
+       emulators accept it), so the root counts as present. */
+    if (path == path.root_path()) return true;
     struct stat st;
     if (stat(path.c_str(), &st) != 0) {
         require(errno == ENOENT || errno == ENOTDIR);
@@ -121,6 +124,9 @@ void check_parents(const fs::path &path)
     fs::path part;
     for (const auto &component : path) {
         part /= component;
+#ifdef __SWITCH__
+        if (part == part.root_path()) continue; // see exists_plain
+#endif
         if (exists_plain(part)) require(fs::is_directory(part));
     }
 }
