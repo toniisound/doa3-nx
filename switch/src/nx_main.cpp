@@ -18,7 +18,10 @@
 
 #include <pthread.h>
 
+#include "xbe_parser.h"
+
 #include <cstdio>
+#include <filesystem>
 #include <exception>
 #include <cstdlib>
 #include <cstring>
@@ -314,6 +317,25 @@ int main(int argc, char **argv)
     static char arg2[sizeof kRunnerXbe];
     std::memcpy(arg2, kRunnerXbe, sizeof kRunnerXbe);
     char *runner_argv[] = {arg0, arg1, arg2, nullptr};
+    // Preflight: the steps the runner takes before its first log line,
+    // traced one by one, so a failure here names its step.
+    try {
+        std::fprintf(stderr, "[nx] preflight: getcwd\n");
+        char cwd[512] = {};
+        std::fprintf(stderr, "[nx] cwd=%s\n", getcwd(cwd, sizeof cwd) ? cwd : "(fail)");
+        std::fprintf(stderr, "[nx] preflight: filesystem::absolute\n");
+        const std::filesystem::path absolute = std::filesystem::absolute(kRunnerXbe);
+        std::fprintf(stderr, "[nx] absolute=%s parent=%s\n", absolute.string().c_str(),
+            absolute.parent_path().string().c_str());
+        std::fprintf(stderr, "[nx] preflight: parse xbe\n");
+        doaxbv::XbeParser parser;
+        const doaxbv::XbeParseResult parsed = parser.parse(kRunnerXbe);
+        std::fprintf(stderr, "[nx] parse ok=%d size=%llu sha256=%s\n", parsed.ok() ? 1 : 0,
+            (unsigned long long)parsed.metadata.fileSize, parsed.metadata.fileSha256.c_str());
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "[nx] preflight exception: %s\n", error.what());
+    }
+
     int code = 1;
     try {
         code = recomp_runner_main(3, runner_argv);
