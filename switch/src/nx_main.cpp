@@ -207,6 +207,7 @@ void doa3_nx_presenter_took_console(void)
 }
 
 static Thread heartbeat_thread;
+uint64_t doa3_nx_kernel_calls(void); // boot_trace.cpp
 
 static void heartbeat(void *arg)
 {
@@ -223,7 +224,8 @@ static void heartbeat(void *arg)
         char line[sizeof last_line];
         std::memcpy(line, last_line, sizeof line);
         line[sizeof line - 1] = '\0';
-        std::printf("\x1b[6;1HArrancando... %5.1f s\x1b[K\n\x1b[K%.78s\n", seconds, line);
+        std::printf("\x1b[6;1HArrancando... %5.1f s   llamadas al kernel: %llu\x1b[K\n\x1b[K%.78s\n",
+            seconds, (unsigned long long)doa3_nx_kernel_calls(), line);
         consoleUpdate(nullptr);
         mutexUnlock(&console_mutex);
     }
