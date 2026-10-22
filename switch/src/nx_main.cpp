@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Nintendo Switch entry point. runner.cpp is compiled with its main renamed to
+// recomp_runner_main; this file sets up the console, the log file and the
+// paths on the SD card, then starts the runner as the desktop launch scripts
+// do: recomp_program_runner --xbe <disc>/default.xbe.
+//
+// SD card layout:
+//   sdmc:/switch/doa3-nx/doa3-nx.nro
+//   sdmc:/switch/doa3-nx/disc/default.xbe   (and the rest of the USA disc)
+//   sdmc:/switch/doa3-nx/doa3-nx.log        (runtime log, rewritten each boot)
+// Saves live in disc/.recomp-storage, as on PC.
+#include <switch.h>
+
+#include <fcntl.h>
+#include <sys/iosupport.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+#ifndef DOA3_NX_VERSION
+#define DOA3_NX_VERSION "0.1.0"
+#endif
+
+int recomp_runner_main(int argc, char **argv); // runner.cpp main, renamed at compile time
+extern "C" void __real_exit(int code) __attribute__((noreturn));
+
+namespace {
+
+const char kRoot[] = "sdmc:/switch/doa3-nx";
+const char kDisc[] = "sdmc:/switch/doa3-nx/disc";
+const char kXbe[] = "sdmc:/switch/doa3-nx/disc/default.xbe";
+const char kLog[] = "sdmc:/switch/doa3-nx/doa3-nx.log";
+// The runner gets the path without the "sdmc:" device prefix (sdmc is the
+// default device): win32_compat.c resolves guest file names case-insensitively
+// one "/" component at a time, which needs the path to start at "/".
+const char kRunnerXbe[] = "/switch/doa3-nx/disc/default.xbe";
+
+bool console_ready = false;
+bool cpu_boosted = false;
+
+bool fileExists(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+void waitForPlus()
+{
+    PadState pad;
+    padInitializeDefault(&pad);
+    std::printf("\nPulsa (+) para salir.\n");
+    consoleUpdate(nullptr);
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
+        consoleUpdate(nullptr);
+        svcSleepThread(16'000'000);
+    }
+}
+
+// The last lines of the log, so a stop is readable on the console itself.
+void printLogTail(int lines)
+{
+    std::fflush(stderr);
+    FILE *file = std::fopen(kLog, "rb");
+    if (file == nullptr) return;
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    const long start = size > 4096 ? size - 4096 : 0;
+    std::fseek(file, start, SEEK_SET);
+    std::string text(static_cast<size_t>(size - start), '\0');
+    text.resize(std::fread(text.data(), 1, text.size(), file));
+    std::fclose(file);
+    size_t pos = text.size();
+    int found = 0;
+    while (pos > 0 && found <= lines) {
+        pos = text.rfind('\n', pos - 1);
+        if (pos == std::string::npos) { pos = 0; break; }
+        ++found;
+    }
+    std::printf("\n--- final del log ---\n%s\n", text.c_str() + (pos ? pos + 1 : 0));
+}
+
+} // namespace
+
+extern "C" {
+
+// stderr goes to the log file at the devoptab level, so every thread's
+// stderr stream (each newlib thread has its own) lands in the same file,
+// while stdout stays on the on-screen console.
+static int log_fd = -1;
+
+static ssize_t logWrite(struct _reent *r, void *fd, const char *ptr, size_t len)
+{
+    (void)r;
+    (void)fd;
+    if (log_fd < 0) return (ssize_t)len;
+    const ssize_t written = write(log_fd, ptr, len);
+    return written < 0 ? (ssize_t)len : written;
+}
+
+static devoptab_t log_devoptab;
+
+static void redirectStderrToLog()
+{
+    log_fd = open(kLog, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (log_fd < 0) return;
+    std::memset(&log_devoptab, 0, sizeof log_devoptab);
+    log_devoptab.name = "doa3log";
+    log_devoptab.write_r = logWrite;
+    devoptab_list[STD_ERR] = &log_devoptab;
+}
+
+// libnx calls these around main.
+void userAppInit(void)
+{
+    // hid is already up (libnx default); configure pads before anyone reads them.
+    padConfigureInput(4, HidNpadStyleSet_NpadStandard);
+    mkdir(kRoot, 0777);
+}
+
+void userAppExit(void)
+{
+    if (cpu_boosted) appletSetCpuBoostMode(ApmCpuBoostMode_Normal);
+    std::fflush(stderr);
+    if (log_fd >= 0) {
+        fsync(log_fd);
+        close(log_fd);
+        log_fd = -1;
+    }
+    if (console_ready) {
+        consoleExit(nullptr);
+        console_ready = false;
+    }
+}
+
+// exit() is wrapped at link time (-Wl,--wrap=exit): a runtime stop with a
+// nonzero code stays on screen instead of dropping back to the menu.
+void __wrap_exit(int code)
+{
+    if (code != 0 && console_ready) {
+        std::printf("\n\x1b[31mEl juego se ha detenido (codigo %d).\x1b[0m\n", code);
+        std::printf("Log completo: %s\n", kLog);
+        printLogTail(12);
+        waitForPlus();
+    }
+    __real_exit(code);
+}
+
+} // extern "C"
+
+int main(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    consoleInit(nullptr);
+    console_ready = true;
+    redirectStderrToLog();
+    std::fprintf(stderr, "DOA3 NX %s (Toniisound), based on NoRain211/doa3-re\n",
+        DOA3_NX_VERSION);
+
+    std::printf("DOA3 NX %s\n\n", DOA3_NX_VERSION);
+    if (!fileExists(kXbe)) {
+        std::printf("No se encuentra %s\n\n", kXbe);
+        std::printf("Copia el contenido del disco USA de Dead or Alive 3\n");
+        std::printf("(extraido con extract-xiso) en %s/\n", kDisc);
+        waitForPlus();
+        consoleExit(nullptr);
+        console_ready = false;
+        return 0;
+    }
+
+    // Held at boot: R runs unpaced (as fast as the CPU allows, to measure
+    // headroom above 60 fps); L keeps the CPU at its normal clock.
+    PadState pad;
+    padInitializeDefault(&pad);
+    padUpdate(&pad);
+    const u64 held = padGetButtons(&pad);
+    if (held & HidNpadButton_R) {
+        setenv("RECOMP_UNPACED", "1", 1);
+        std::fprintf(stderr, "[nx] RECOMP_UNPACED=1 (R held at boot)\n");
+    }
+    if (!(held & HidNpadButton_L)) {
+        // 1785 MHz CPU while no GPU work is submitted; the GPU backend will
+        // revisit this, since boost mode lowers the GPU clock.
+        cpu_boosted = R_SUCCEEDED(appletSetCpuBoostMode(ApmCpuBoostMode_FastLoad));
+    }
+    std::fprintf(stderr, "[nx] cpu boost %s\n", cpu_boosted ? "on" : "off");
+    std::printf("CPU boost: %s   Modo: %s\n", cpu_boosted ? "si (1785 MHz)" : "no",
+        (held & HidNpadButton_R) ? "sin limite (unpaced)" : "60 Hz");
+    std::printf("Arrancando...\n");
+    consoleUpdate(nullptr);
+
+    // The runner resolves D:\ against the folder holding default.xbe.
+    chdir(kRoot);
+    static char arg0[] = "doa3-nx";
+    static char arg1[] = "--xbe";
+    static char arg2[sizeof kRunnerXbe];
+    std::memcpy(arg2, kRunnerXbe, sizeof kRunnerXbe);
+    char *runner_argv[] = {arg0, arg1, arg2, nullptr};
+    const int code = recomp_runner_main(3, runner_argv);
+    std::fprintf(stderr, "[nx] runner returned %d\n", code);
+    return code;
+}

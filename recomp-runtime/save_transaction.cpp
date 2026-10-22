@@ -14,6 +14,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -180,7 +181,15 @@ void write_file(const fs::path &path, std::string_view data)
    with no rollback. */
 void sync_to_disk(const fs::path &path)
 {
-#ifndef _WIN32
+#if defined(__SWITCH__)
+    // The console's SD filesystem cannot open a directory as a file; sync
+    // the file itself and leave the directory entry to the FAT driver.
+    const int fd = open(path.c_str(), O_RDONLY);
+    require(fd >= 0);
+    const bool synced = fsync(fd) == 0 || errno == ENOSYS || errno == EINVAL;
+    close(fd);
+    require(synced);
+#elif !defined(_WIN32)
     for (const fs::path &target : {path, path.parent_path()}) {
         const int fd = open(target.c_str(), O_RDONLY | O_CLOEXEC);
         require(fd >= 0);
