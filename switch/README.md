@@ -12,7 +12,7 @@ homebrew `.nro`.
 ## Status
 
 **Stage 1 — CPU bring-up.** The whole lifted program runs on the console, but
-the presenter draws nothing and audio is off: the screen shows the guest frame
+the presenter draws nothing (audio plays): the screen shows the guest frame
 rate, draws per frame and frame times. This stage measures whether the
 console's CPU can run the game at 60 fps before the GPU backend is written.
 
@@ -21,7 +21,7 @@ console's CPU can run the game at 60 fps before the GPU backend is written.
 | Lifted program + runtime | shared with doa3-re (`recomp-runtime/`) | builds for AArch64 |
 | Fibers | `fiber_switch_arm64.S` (shared) | — |
 | Video | `switch/src/d3d_presenter_switch_probe.cpp` | probe only (no rendering) |
-| Audio | `switch/src/audio_output_null.cpp` | off |
+| Audio | `switch/src/audio_output_switch.cpp` (audout, mixer on core 2) | on |
 | Input | `switch/src/input_host_switch.c` (libnx pads, rumble) | 4 ports |
 | Files and saves | `win32_compat.c` + `switch/include` shims | SD card |
 

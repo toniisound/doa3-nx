@@ -48,7 +48,7 @@ void printHeader(const RecompD3dPresenter *p)
     std::printf("\x1b[2J\x1b[1;1H");
     std::printf("DOA3 NX - fase 1: prueba de rendimiento de CPU\n");
     std::printf("==============================================\n\n");
-    std::printf("El juego corre sin graficos ni sonido: solo se mide\n");
+    std::printf("El juego corre sin graficos (con sonido): se mide\n");
     std::printf("a cuantos fotogramas por segundo avanza (objetivo: 60).\n\n");
     std::printf("Resolucion del juego: %ux%u\n", p->width, p->height);
     std::printf("Salir: HOME > cerrar, o ZL+ZR+(-)+(+) a la vez\n\n");
