@@ -23,7 +23,6 @@
 
 extern "C" {
 void doa3_nx_release_console(void);                                                // nx_main.cpp
-void doa3_nx_set_next_thread_core(int core);                                       // nx_main.cpp
 void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row);     // profile.cpp
 }
 
@@ -31,7 +30,9 @@ namespace {
 
 struct PresenterThread {
     Handle owner = threadGetCurHandle();
-    std::thread worker;
+    Thread worker{};
+    bool worker_started = false;
+    RecompD3dPresenterConfig config{};
     std::mutex mutex;
     std::condition_variable changed;
     D3dCapturePacket packets[3];
@@ -129,6 +130,7 @@ void execute(PresenterThread &thread, RecompD3dPresenter *backend, const D3dCapt
 
 void run(PresenterThread &thread, RecompD3dPresenterConfig config)
 {
+    std::fprintf(stderr, "[gl] render thread started on core %d\n", svcGetCurrentProcessorNumber());
     RecompD3dPresenter *backend = nullptr;
     RecompD3dPresenterError created;
     try {
@@ -171,6 +173,24 @@ void run(PresenterThread &thread, RecompD3dPresenterConfig config)
     }
     thread.destroyed = gl_backend_destroy(&backend);
     std::fprintf(stderr, "recomp d3d presenter thread: draw declines=%u\n", thread.draw_declines);
+}
+
+// Mesa's GLSL compiler and EGL setup need far more than the 128 KiB a default
+// libnx pthread gets, so the render thread is a libnx thread with an 8 MiB stack.
+constexpr size_t kRenderStackBytes = 8u * 1024u * 1024u;
+
+void renderEntry(void *argument)
+{
+    auto &thread = *static_cast<PresenterThread *>(argument);
+    run(thread, thread.config);
+}
+
+void joinWorker(PresenterThread &thread)
+{
+    if (!thread.worker_started) return;
+    threadWaitForExit(&thread.worker);
+    threadClose(&thread.worker);
+    thread.worker_started = false;
 }
 
 // Once a second: guest frame rate, worst frame, time spent waiting for the
@@ -253,19 +273,32 @@ RecompD3dPresenterError recomp_d3d_presenter_create(
         thread = std::make_unique<PresenterThread>();
         thread->immediate = immediate_setting;
         padInitializeDefault(&thread->pad);
-        doa3_nx_set_next_thread_core(1); // the render thread gets core 1 to itself
-        thread->worker = std::thread(run, std::ref(*thread), *config);
+        thread->config = *config;
     } catch (const std::bad_alloc &) {
         return RECOMP_D3D_PRESENTER_OUT_OF_MEMORY;
-    } catch (const std::system_error &) {
+    }
+    // Core 1 to itself; priority just above the default so the driver's
+    // own helper threads cannot starve it.
+    Result rc = threadCreate(&thread->worker, renderEntry, thread.get(), nullptr,
+        kRenderStackBytes, 0x2B, 1);
+    if (R_SUCCEEDED(rc)) rc = threadStart(&thread->worker);
+    if (R_FAILED(rc)) {
+        std::fprintf(stderr, "recomp d3d presenter: render thread create failed 0x%x\n", rc);
         return RECOMP_D3D_PRESENTER_HOST_FAILURE;
     }
+    thread->worker_started = true;
     std::unique_lock<std::mutex> lock(thread->mutex);
-    thread->changed.wait(lock, [&] { return thread->started; });
+    // A backend that hangs in EGL or the driver is reported instead of a black screen.
+    if (!thread->changed.wait_for(lock, std::chrono::seconds(20), [&] { return thread->started; })) {
+        lock.unlock();
+        std::fprintf(stderr, "recomp d3d presenter: render thread did not start within 20 s\n");
+        thread.release(); // the thread may still run; leak it rather than free under it
+        return RECOMP_D3D_PRESENTER_HOST_FAILURE;
+    }
     const auto error = thread->created;
     lock.unlock();
     if (error != RECOMP_D3D_PRESENTER_OK) {
-        thread->worker.join();
+        joinWorker(*thread);
         std::fprintf(stderr, "recomp d3d presenter: OpenGL backend failed error=%d\n", static_cast<int>(error));
         return error;
     }
@@ -315,7 +348,7 @@ RecompD3dPresenterError recomp_d3d_presenter_destroy(RecompD3dPresenter **presen
         thread.shutdown = true;
     }
     thread.changed.notify_all();
-    thread.worker.join();
+    joinWorker(thread);
     const auto pending = thread.status == RECOMP_D3D_PRESENTER_CLOSED ? RECOMP_D3D_PRESENTER_OK : thread.status;
     const auto destroyed = thread.destroyed != RECOMP_D3D_PRESENTER_OK ? thread.destroyed : pending;
     delete active_thread;
