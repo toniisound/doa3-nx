@@ -34,6 +34,10 @@
 int recomp_runner_main(int argc, char **argv); // runner.cpp main, renamed at compile time
 extern "C" void __real_exit(int code) __attribute__((noreturn));
 
+extern "C" {
+static void flushLog(void); // below, with the log devoptab
+}
+
 namespace {
 
 const char kRoot[] = "sdmc:/switch/doa3-nx";
@@ -72,6 +76,7 @@ void waitForPlus()
 void printLogTail(int lines)
 {
     std::fflush(stderr);
+    flushLog();
     FILE *file = std::fopen(kLog, "rb");
     if (file == nullptr) return;
     std::fseek(file, 0, SEEK_END);
@@ -119,22 +124,68 @@ static void trackLastLine(const char *ptr, size_t len)
     }
 }
 
+// The runtime logs every guest file read and write; one SD write per line
+// would cost the guest real time. Lines collect in memory instead and a
+// helper thread on another core writes them out four times a second (and
+// whenever the buffer fills, or before exit and crash reports).
+static Mutex log_mutex;
+static char log_buffer[256 * 1024];
+static size_t log_used;
+static Thread log_thread;
+static volatile bool log_thread_running;
+
+static void flushLogLocked()
+{
+    if (log_fd >= 0 && log_used != 0) write(log_fd, log_buffer, log_used);
+    log_used = 0;
+}
+
+static void flushLog()
+{
+    mutexLock(&log_mutex);
+    flushLogLocked();
+    mutexUnlock(&log_mutex);
+}
+
+static void logFlusher(void *arg)
+{
+    (void)arg;
+    while (log_thread_running) {
+        svcSleepThread(250'000'000);
+        flushLog();
+    }
+}
+
 static ssize_t logWrite(struct _reent *r, void *fd, const char *ptr, size_t len)
 {
     (void)r;
     (void)fd;
+    mutexLock(&log_mutex);
     trackLastLine(ptr, len);
-    if (log_fd < 0) return (ssize_t)len;
-    const ssize_t written = write(log_fd, ptr, len);
-    return written < 0 ? (ssize_t)len : written;
+    if (log_fd >= 0) {
+        if (log_used + len > sizeof log_buffer) flushLogLocked();
+        if (len > sizeof log_buffer) {
+            write(log_fd, ptr, len);
+        } else {
+            std::memcpy(log_buffer + log_used, ptr, len);
+            log_used += len;
+        }
+    }
+    mutexUnlock(&log_mutex);
+    return (ssize_t)len;
 }
 
 static devoptab_t log_devoptab;
 
 static void redirectStderrToLog()
 {
+    mutexInit(&log_mutex);
     log_fd = open(kLog, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (log_fd < 0) return;
+    log_thread_running = true;
+    if (R_SUCCEEDED(threadCreate(&log_thread, logFlusher, nullptr, nullptr, 0x8000, 0x2D, 2))) {
+        threadStart(&log_thread);
+    }
     std::memset(&log_devoptab, 0, sizeof log_devoptab);
     log_devoptab.name = "doa3log";
     log_devoptab.write_r = logWrite;
@@ -143,7 +194,12 @@ static void redirectStderrToLog()
 
 void doa3_nx_log_raw(const char *text, size_t length)
 {
-    if (log_fd >= 0) write(log_fd, text, length);
+    // Crash path: the faulting thread may hold log_mutex, so no locking.
+    if (log_fd >= 0) {
+        if (log_used != 0) write(log_fd, log_buffer, log_used);
+        log_used = 0;
+        write(log_fd, text, length);
+    }
 }
 
 bool doa3_nx_console_ready(void)
@@ -164,6 +220,7 @@ void userAppExit(void)
     if (cpu_boosted) appletSetCpuBoostMode(ApmCpuBoostMode_Normal);
     std::fflush(stderr);
     if (log_fd >= 0) {
+        flushLog();
         fsync(log_fd);
         close(log_fd);
         log_fd = -1;
