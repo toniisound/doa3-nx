@@ -223,7 +223,7 @@ add_executable(doa3-nx
     "${NX_SRC}/crash_report.cpp"
     "${NX_SRC}/profile.cpp"
     "${NX_SRC}/input_host_switch.c"
-    "${NX_SRC}/audio_output_null.cpp"
+    "${NX_SRC}/audio_output_switch.cpp"
     "${NX_SRC}/d3d_presenter_switch_probe.cpp"
     "${_missing_source}"
     ${_recomp_program_sources}
