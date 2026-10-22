@@ -16,6 +16,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <pthread.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -94,10 +96,30 @@ extern "C" {
 // while stdout stays on the on-screen console.
 static int log_fd = -1;
 
+// The last complete log line, shown on screen while the game boots.
+static char last_line[96];
+static char line_build[96];
+static size_t line_length;
+
+static void trackLastLine(const char *ptr, size_t len)
+{
+    for (size_t i = 0; i < len; ++i) {
+        const char c = ptr[i];
+        if (c == '\n') {
+            line_build[line_length] = '\0';
+            if (line_length != 0) std::memcpy(last_line, line_build, line_length + 1);
+            line_length = 0;
+        } else if (line_length + 1 < sizeof line_build && c >= ' ') {
+            line_build[line_length++] = c;
+        }
+    }
+}
+
 static ssize_t logWrite(struct _reent *r, void *fd, const char *ptr, size_t len)
 {
     (void)r;
     (void)fd;
+    trackLastLine(ptr, len);
     if (log_fd < 0) return (ssize_t)len;
     const ssize_t written = write(log_fd, ptr, len);
     return written < 0 ? (ssize_t)len : written;
@@ -135,6 +157,75 @@ void userAppExit(void)
     if (console_ready) {
         consoleExit(nullptr);
         console_ready = false;
+    }
+}
+
+// host_diagnostics.cpp gives stderr a 64 KiB buffer and flushes it from a
+// helper thread. newlib streams are per thread, so that thread never flushes
+// the main thread's stderr; line buffering keeps the log current instead.
+int __real_setvbuf(FILE *stream, char *buffer, int mode, size_t size);
+int __wrap_setvbuf(FILE *stream, char *buffer, int mode, size_t size)
+{
+    if (stream == stderr && mode == _IOFBF) mode = _IOLBF;
+    return __real_setvbuf(stream, buffer, mode, size);
+}
+
+// libnx starts every pthread (std::thread included) on the main thread's
+// core. The guest runs on the main thread and never yields, so host helper
+// threads (DirectSound, vblank, log flushing) move to cores 1 and 2.
+int __real_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+    void *(*start)(void *), void *arg);
+int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+    void *(*start)(void *), void *arg)
+{
+    const int rc = __real_pthread_create(thread, attr, start, arg);
+    if (rc != 0 || thread == nullptr) return rc;
+    static unsigned next_core = 1;
+    u64 mask = 0;
+    if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0))) return rc;
+    mask &= ~1ull; // keep core 0 for the guest
+    if (mask == 0) return rc;
+    unsigned core = next_core;
+    for (int tries = 0; tries < 4 && !(mask & (1ull << core)); ++tries) core = core % 3u + 1u;
+    next_core = core % 2u + 1u;
+    // pthread_t is libnx's struct __pthread_t*, whose first member is a Thread
+    // and whose first field is the kernel handle.
+    const Handle handle = *reinterpret_cast<const Handle *>(*thread);
+    svcSetThreadCoreMask(handle, (s32)core, (u32)mask);
+    return rc;
+}
+
+// Until the presenter takes the screen, a heartbeat shows the boot is alive.
+static Mutex console_mutex;
+static bool presenter_owns_console = false;
+
+void doa3_nx_presenter_took_console(void)
+{
+    mutexLock(&console_mutex);
+    presenter_owns_console = true;
+    mutexUnlock(&console_mutex);
+}
+
+static Thread heartbeat_thread;
+
+static void heartbeat(void *arg)
+{
+    (void)arg;
+    const u64 start = armGetSystemTick();
+    for (;;) {
+        svcSleepThread(500'000'000);
+        mutexLock(&console_mutex);
+        if (presenter_owns_console || !console_ready) {
+            mutexUnlock(&console_mutex);
+            return;
+        }
+        const double seconds = armTicksToNs(armGetSystemTick() - start) / 1e9;
+        char line[sizeof last_line];
+        std::memcpy(line, last_line, sizeof line);
+        line[sizeof line - 1] = '\0';
+        std::printf("\x1b[6;1HArrancando... %5.1f s\x1b[K\n\x1b[K%.78s\n", seconds, line);
+        consoleUpdate(nullptr);
+        mutexUnlock(&console_mutex);
     }
 }
 
@@ -194,6 +285,11 @@ int main(int argc, char **argv)
         (held & HidNpadButton_R) ? "sin limite (unpaced)" : "60 Hz");
     std::printf("Arrancando...\n");
     consoleUpdate(nullptr);
+    mutexInit(&console_mutex);
+    if (R_SUCCEEDED(threadCreate(&heartbeat_thread, heartbeat, nullptr, nullptr,
+            0x10000, 0x2D, 1))) {
+        threadStart(&heartbeat_thread);
+    }
 
     // The runner resolves D:\ against the folder holding default.xbe.
     chdir(kRoot);

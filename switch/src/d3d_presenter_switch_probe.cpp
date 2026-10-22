@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <new>
 
+extern "C" void doa3_nx_presenter_took_console(void); // nx_main.cpp
+
 struct RecompD3dPresenter {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -130,6 +132,7 @@ RecompD3dPresenterError recomp_d3d_presenter_create(
     p->height = config->height;
     p->boot = std::chrono::steady_clock::now();
     padInitializeDefault(&p->pad);
+    doa3_nx_presenter_took_console();
     printHeader(p);
     std::fprintf(stderr, "[presenter] Switch probe presenter %ux%u (no rendering)\n",
         p->width, p->height);
