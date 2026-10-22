@@ -3,6 +3,7 @@
    newlib/libsysbase may not provide. A strong definition in the toolchain
    libraries wins whenever it exists. */
 #include <errno.h>
+#include <stddef.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -20,6 +21,14 @@ __attribute__((weak)) int futimens(int fd, const struct timespec times[2])
     (void)fd;
     (void)times;
     return 0;
+}
+
+/* C11 timespec_get: newlib declares it, devkitA64 does not implement it. */
+__attribute__((weak)) int timespec_get(struct timespec *ts, int base)
+{
+    if (ts == NULL || base != TIME_UTC) return 0;
+    if (clock_gettime(CLOCK_REALTIME, ts) != 0) return 0;
+    return base;
 }
 
 /* One process owns the SD card's save journal; the advisory lock always holds. */
