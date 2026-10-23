@@ -258,8 +258,9 @@ set_source_files_properties("${RUNTIME}/runner.cpp" PROPERTIES
     COMPILE_DEFINITIONS "main=recomp_runner_main")
 # The generated chunks are ~140k lines each; -O2 keeps the build time sane
 # while still giving the register allocation the lifted code needs.
+set(DOA3_NX_GENERATED_OPT "-O2" CACHE STRING "Optimization level of the lifted program chunks")
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
-    COMPILE_OPTIONS "-O2;-w")
+    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w")
 # Direct (not GOT) access to globals from C, and libm calls such as sqrt
 # inlined as instructions: errno is never read after them.
 target_compile_options(doa3-nx PRIVATE
