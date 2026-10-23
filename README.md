@@ -3,7 +3,7 @@
 Nintendo Switch port of *Dead or Alive 3* (Xbox, 2001), built on
 [NoRain211/doa3-re](https://github.com/NoRain211/doa3-re): a native static
 recompilation of the original Xbox executable with a hand-written runtime.
-This repository is a fork of it; everything Switch-specific lives in
+This repository keeps its full history and code; everything Switch-specific lives in
 [`switch/`](switch), and the upstream README is kept as
 [`README.doa3-re.md`](README.doa3-re.md).
 
