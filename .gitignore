@@ -67,3 +67,6 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Switch homebrew icon (cover art, not distributed)
+switch/icon.jpg
