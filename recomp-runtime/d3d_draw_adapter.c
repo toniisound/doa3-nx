@@ -2400,6 +2400,7 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
 /* Switch profiler (switch/src/profile.cpp): time between the steps of a draw. */
 void doa3_nx_stage_begin(void);
 void doa3_nx_stage_mark(int stage);
+void doa3_nx_counter_add(int counter, uint64_t value);
 #define DRAW_STAGE_BEGIN() doa3_nx_stage_begin()
 #define DRAW_STAGE(n) doa3_nx_stage_mark(n)
 #else
@@ -2441,7 +2442,34 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
         for (uint32_t i = 0u; i < count; ++i) sequential[i] = (uint16_t)i;
         indices = sequential;
     }
+#if defined(__SWITCH__)
+    {
+        /* Many draws index a small window of a large vertex buffer. Copying
+           from vertex 0 to the largest index moved the whole prefix through
+           the capture and the GL upload on every draw; rebase the indices so
+           only the referenced window travels. The capture copies the indices,
+           so one static buffer serves every draw (one guest thread). */
+        static uint16_t rebased[65536];
+        uint32_t lowest = 0xffffu, highest = 0u;
+        for (uint32_t i = 0u; i < count; ++i) {
+            const uint32_t value = indices[i];
+            if (value < lowest) lowest = value;
+            if (value > highest) highest = value;
+        }
+        doa3_nx_counter_add(0, (uint64_t)(highest + 1u) * stride);
+        if (lowest != 0u && vertices != 0u) {
+            for (uint32_t i = 0u; i < count; ++i) rebased[i] = (uint16_t)(indices[i] - lowest);
+            indices = rebased;
+            vertices += lowest * stride;
+            highest -= lowest;
+            doa3_nx_counter_add(2, 1u);
+        }
+        doa3_nx_counter_add(1, (uint64_t)(highest + 1u) * stride);
+        draw->vertex_count = highest + 1u;
+    }
+#else
     draw->vertex_count = largest_index((const uint8_t *)indices, count) + 1u;
+#endif
     uint32_t bytes = recomp_d3d_draw_vertex_bytes(stride, draw->vertex_count - 1u);
     draw->vertex_bytes = vertices ? guest_span(vertices, bytes) : NULL;
     if (!draw->vertex_bytes) { decline = "doa3-vertices"; goto finished; }

@@ -52,6 +52,7 @@
 #endif
 
 extern "C" uint64_t doa3_nx_ticks(void);
+extern "C" void doa3_nx_counter_add(int counter, uint64_t value);
 extern "C" void doa3_nx_render_stage_add(int stage, uint64_t ticks);
 
 namespace {
@@ -70,6 +71,29 @@ constexpr uint32_t kNoProgramConstants = UINT32_MAX;
 
 typedef void (*ClipControlFn)(GLenum origin, GLenum depth);
 ClipControlFn glClipControlPtr = nullptr;
+typedef void (*BufferStorageFn)(GLenum target, GLsizeiptr size, const void *data, GLbitfield flags);
+BufferStorageFn glBufferStoragePtr = nullptr;
+#ifndef GL_MAP_PERSISTENT_BIT
+#define GL_MAP_PERSISTENT_BIT 0x0040
+#endif
+#ifndef GL_MAP_COHERENT_BIT
+#define GL_MAP_COHERENT_BIT 0x0080
+#endif
+
+// A streaming buffer. With ARB_buffer_storage it stays mapped for good and
+// segments are memcpy'd straight in (glBufferSubData cost 4-6 ms a frame on
+// hardware). The ring is split in quarters; leaving a quarter fences it, and
+// re-entering it a lap later waits for that fence, so the GPU never reads
+// bytes being overwritten. A segment never exceeds a quarter.
+struct StreamRing {
+    GLuint buffer = 0;
+    uint8_t *map = nullptr;   // null: glBufferSubData with orphaning
+    uint32_t capacity = 0;
+    uint32_t used = 0;
+    uint32_t quarter = 0;     // current quarter
+    GLsync fences[4]{};
+    uint64_t waits = 0;
+};
 
 struct TextureEntry {
     bool used = false;
@@ -151,6 +175,9 @@ struct DrawSegment {
     std::vector<uint8_t> index_data;
     std::vector<uint8_t> uniform_data;
     std::vector<QueuedDraw> draws;
+    // Vertex spans already in vertex_data: captured payload pointers are
+    // stable within a packet, so the same pointer and size is the same data.
+    std::unordered_map<const void *, std::pair<uint32_t, uint32_t>> vertex_seen; // size, offset
 };
 
 GLenum glBlendFactor(RecompD3dBlendFactor factor, bool alpha_channel)
@@ -723,7 +750,7 @@ struct RecompD3dPresenter {
     GLuint address_samplers[6][6]{};
 
     GLuint vertex_buffer = 0, index_buffer = 0, uniform_buffer = 0;
-    uint32_t vertex_used = 0, index_used = 0, uniform_used = 0;
+    StreamRing vertex_ring, index_ring, uniform_ring;
     GLint uniform_align = 256;
 
     DrawSegment segment;
@@ -1216,19 +1243,72 @@ void applyState(RecompD3dPresenter *p, const DrawState &s)
 // Reserves and fills a range of a streaming buffer. Uploads go through
 // GL_COPY_WRITE_BUFFER, which is not VAO state, so the element-buffer binding
 // of whichever VAO is bound stays untouched.
-uint32_t ringUpload(GLuint buffer, uint32_t &used, uint32_t capacity, const void *data, uint32_t bytes,
-                    uint32_t align)
+void ringStep(StreamRing &ring)
 {
-    uint32_t base = (used + align - 1u) & ~(align - 1u);
-    glBindBuffer(GL_COPY_WRITE_BUFFER, buffer);
-    if (base + bytes > capacity) {
-        // Orphan: the driver hands out fresh storage while queued draws keep the old.
-        glBufferData(GL_COPY_WRITE_BUFFER, capacity, nullptr, GL_STREAM_DRAW);
+    GLsync &leaving = ring.fences[ring.quarter];
+    if (leaving) glDeleteSync(leaving);
+    leaving = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    ring.quarter = (ring.quarter + 1u) & 3u;
+    GLsync &entering = ring.fences[ring.quarter];
+    if (entering) {
+        if (glClientWaitSync(entering, 0, 0) == GL_TIMEOUT_EXPIRED) {
+            ++ring.waits;
+            glClientWaitSync(entering, GL_SYNC_FLUSH_COMMANDS_BIT, 2000000000ull);
+        }
+        glDeleteSync(entering);
+        entering = nullptr;
+    }
+}
+
+uint32_t ringUpload(StreamRing &ring, const void *data, uint32_t bytes, uint32_t align)
+{
+    uint32_t base = (ring.used + align - 1u) & ~(align - 1u);
+    if (ring.map == nullptr) {
+        glBindBuffer(GL_COPY_WRITE_BUFFER, ring.buffer);
+        if (base + bytes > ring.capacity) {
+            // Orphan: the driver hands out fresh storage while queued draws keep the old.
+            glBufferData(GL_COPY_WRITE_BUFFER, ring.capacity, nullptr, GL_STREAM_DRAW);
+            base = 0;
+        }
+        if (bytes != 0u) glBufferSubData(GL_COPY_WRITE_BUFFER, base, bytes, data);
+        ring.used = base + bytes;
+        return base;
+    }
+    const uint32_t quarter_bytes = ring.capacity / 4u;
+    if (base + bytes > ring.capacity) {
+        while (ring.quarter != 0u) ringStep(ring);
         base = 0;
     }
-    if (bytes != 0u) glBufferSubData(GL_COPY_WRITE_BUFFER, base, bytes, data);
-    used = base + bytes;
+    if (bytes != 0u) {
+        // Keep a segment inside one quarter: a fence placed between its
+        // upload and its draws would not cover them.
+        const uint32_t last = (base + bytes - 1u) / quarter_bytes;
+        if (base / quarter_bytes != last) base = last * quarter_bytes;
+        while (ring.quarter != last) ringStep(ring);
+        std::memcpy(ring.map + base, data, bytes);
+    }
+    ring.used = base + bytes;
     return base;
+}
+
+void ringCreate(StreamRing &ring, GLuint &buffer, uint32_t capacity)
+{
+    ring.capacity = capacity;
+    glGenBuffers(1, &buffer);
+    ring.buffer = buffer;
+    glBindBuffer(GL_COPY_WRITE_BUFFER, buffer);
+    if (glBufferStoragePtr != nullptr && std::getenv("RECOMP_GL_SUBDATA") == nullptr) {
+        const GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        glBufferStoragePtr(GL_COPY_WRITE_BUFFER, capacity, nullptr, flags);
+        ring.map = static_cast<uint8_t *>(glMapBufferRange(GL_COPY_WRITE_BUFFER, 0, capacity, flags));
+        if (ring.map != nullptr) return;
+        std::fprintf(stderr, "[gl] persistent map failed 0x%x; using glBufferSubData\n", glGetError());
+        glDeleteBuffers(1, &buffer);
+        glGenBuffers(1, &buffer);
+        ring.buffer = buffer;
+        glBindBuffer(GL_COPY_WRITE_BUFFER, buffer);
+    }
+    glBufferData(GL_COPY_WRITE_BUFFER, capacity, nullptr, GL_STREAM_DRAW);
 }
 
 void flushSegment(RecompD3dPresenter *p)
@@ -1239,22 +1319,21 @@ void flushSegment(RecompD3dPresenter *p)
     const uint32_t v_bytes = static_cast<uint32_t>(seg.vertex_data.size());
     const uint32_t i_bytes = static_cast<uint32_t>(seg.index_data.size());
     const uint32_t u_bytes = static_cast<uint32_t>(seg.uniform_data.size());
-    if (v_bytes > kVertexRingBytes || i_bytes > kIndexRingBytes || u_bytes > kUniformRingBytes) {
+    if (v_bytes > kVertexRingBytes / 4u || i_bytes > kIndexRingBytes / 4u || u_bytes > kUniformRingBytes / 4u) {
         std::fprintf(stderr, "recomp d3d presenter: segment too large v=%u i=%u u=%u\n", v_bytes, i_bytes, u_bytes);
         seg.draws.clear();
         seg.vertex_data.clear();
         seg.index_data.clear();
         seg.uniform_data.clear();
+        seg.vertex_seen.clear();
         return;
     }
 
     uint64_t upload_start = doa3_nx_ticks();
-    const uint32_t v_base = ringUpload(p->vertex_buffer, p->vertex_used, kVertexRingBytes,
-        seg.vertex_data.data(), v_bytes, 256u);
-    const uint32_t i_base = ringUpload(p->index_buffer, p->index_used, kIndexRingBytes,
-        seg.index_data.data(), i_bytes, 256u);
-    const uint32_t u_base = ringUpload(p->uniform_buffer, p->uniform_used, kUniformRingBytes,
-        seg.uniform_data.data(), u_bytes, static_cast<uint32_t>(p->uniform_align));
+    const uint32_t v_base = ringUpload(p->vertex_ring, seg.vertex_data.data(), v_bytes, 256u);
+    const uint32_t i_base = ringUpload(p->index_ring, seg.index_data.data(), i_bytes, 256u);
+    const uint32_t u_base = ringUpload(p->uniform_ring, seg.uniform_data.data(), u_bytes,
+        static_cast<uint32_t>(p->uniform_align));
 
     doa3_nx_render_stage_add(3, doa3_nx_ticks() - upload_start);
     StageTimer timer(4);
@@ -1349,6 +1428,7 @@ void flushSegment(RecompD3dPresenter *p)
     seg.vertex_data.clear();
     seg.index_data.clear();
     seg.uniform_data.clear();
+    seg.vertex_seen.clear();
 }
 
 bool initEgl(RecompD3dPresenter *p)
@@ -1405,6 +1485,7 @@ bool initEgl(RecompD3dPresenter *p)
         std::fprintf(stderr, "[gl] gladLoadGL failed\n");
         return false;
     }
+    glBufferStoragePtr = reinterpret_cast<BufferStorageFn>(eglGetProcAddress("glBufferStorage"));
     glClipControlPtr = reinterpret_cast<ClipControlFn>(eglGetProcAddress("glClipControl"));
     if (!glClipControlPtr) {
         std::fprintf(stderr, "[gl] glClipControl unavailable\n");
@@ -1555,9 +1636,11 @@ RecompD3dPresenterError gl_backend_create(const RecompD3dPresenterConfig *config
         glBindBuffer(GL_COPY_WRITE_BUFFER, buffer);
         glBufferData(GL_COPY_WRITE_BUFFER, bytes, nullptr, usage);
     };
-    allocate(p->vertex_buffer, kVertexRingBytes, GL_STREAM_DRAW);
-    allocate(p->index_buffer, kIndexRingBytes, GL_STREAM_DRAW);
-    allocate(p->uniform_buffer, kUniformRingBytes, GL_STREAM_DRAW);
+    ringCreate(p->vertex_ring, p->vertex_buffer, kVertexRingBytes);
+    ringCreate(p->index_ring, p->index_buffer, kIndexRingBytes);
+    ringCreate(p->uniform_ring, p->uniform_buffer, kUniformRingBytes);
+    std::fprintf(stderr, "[gl] streaming buffers: %s\n",
+        p->vertex_ring.map ? "persistent mapped" : "glBufferSubData");
     allocate(p->gamma_buffer, sizeof p->gamma_ramp, GL_DYNAMIC_DRAW);
 
     std::fprintf(stderr, "[gl] compiling the present pass\n");
@@ -1732,16 +1815,40 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             state.blend_op = glBlendOpFor(draw.blend.op);
         }
 
+        // A segment must fit one quarter of each streaming ring; flush early
+        // rather than have flushSegment drop it.
+        {
+            const uint64_t v_need = uint64_t(draw.vertex_stride) * draw.vertex_count + 16u;
+            const uint64_t i_need = uint64_t(draw.primitive_type == RECOMP_D3D_PT_TRIANGLEFAN
+                ? draw.triangle_count * 3u : draw.index_count) * 2u + 16u;
+            const uint64_t u_need = 2u * (kTransformUniformFloats * sizeof(float) + p->uniform_align) +
+                kProgramConstantFloats * sizeof(float) + p->uniform_align;
+            const DrawSegment &seg = p->segment;
+            if (!seg.draws.empty() && (seg.vertex_data.size() + v_need > kVertexRingBytes / 4u ||
+                    seg.index_data.size() + i_need > kIndexRingBytes / 4u ||
+                    seg.uniform_data.size() + u_need > kUniformRingBytes / 4u)) {
+                flushSegment(p);
+            }
+        }
+
         // Vertex and index data.
         auto &vdata = p->segment.vertex_data;
-        uint32_t v_offset = static_cast<uint32_t>(vdata.size());
-        if (v_offset % 16u != 0u) {
-            vdata.resize((v_offset + 15u) & ~15u, 0);
-            v_offset = static_cast<uint32_t>(vdata.size());
-        }
         const uint32_t v_size = draw.vertex_stride * draw.vertex_count;
-        const auto *v_src = static_cast<const uint8_t *>(draw.vertex_bytes);
-        vdata.insert(vdata.end(), v_src, v_src + v_size);
+        uint32_t v_offset;
+        auto seen = p->segment.vertex_seen.find(draw.vertex_bytes);
+        if (seen != p->segment.vertex_seen.end() && seen->second.first == v_size) {
+            v_offset = seen->second.second;
+            doa3_nx_counter_add(3, v_size);
+        } else {
+            v_offset = static_cast<uint32_t>(vdata.size());
+            if (v_offset % 16u != 0u) {
+                vdata.resize((v_offset + 15u) & ~15u, 0);
+                v_offset = static_cast<uint32_t>(vdata.size());
+            }
+            const auto *v_src = static_cast<const uint8_t *>(draw.vertex_bytes);
+            vdata.insert(vdata.end(), v_src, v_src + v_size);
+            p->segment.vertex_seen[draw.vertex_bytes] = {v_size, v_offset};
+        }
 
         auto &idata = p->segment.index_data;
         uint32_t i_offset = static_cast<uint32_t>(idata.size());
@@ -2007,6 +2114,13 @@ RecompD3dPresenterError gl_backend_destroy(RecompD3dPresenter **presenter)
     RecompD3dPresenter *p = *presenter;
     flushSegment(p);
     glFinish();
+    for (StreamRing *ring : {&p->vertex_ring, &p->index_ring, &p->uniform_ring}) {
+        if (ring->map) {
+            glBindBuffer(GL_COPY_WRITE_BUFFER, ring->buffer);
+            glUnmapBuffer(GL_COPY_WRITE_BUFFER);
+            ring->map = nullptr;
+        }
+    }
     destroyEgl(p); // the context owns every GL object
     delete p;
     *presenter = nullptr;

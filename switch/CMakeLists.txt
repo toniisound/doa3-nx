@@ -260,6 +260,11 @@ set_source_files_properties("${RUNTIME}/runner.cpp" PROPERTIES
 # while still giving the register allocation the lifted code needs.
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
     COMPILE_OPTIONS "-O2;-w")
+# Direct (not GOT) access to globals from C, and libm calls such as sqrt
+# inlined as instructions: errno is never read after them.
+target_compile_options(doa3-nx PRIVATE
+    "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/doa3_nx_visibility.h>"
+    "$<$<COMPILE_LANGUAGE:C>:-fno-math-errno>")
 target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=abort" "-Wl,--wrap=setvbuf" "-Wl,--wrap=pthread_create"
     "-Wl,--wrap=recomp_install_host_diagnostics" "-Wl,--wrap=recomp_save_initialize"
     "-Wl,--wrap=recomp_runtime_init" "-Wl,--wrap=recomp_music_initialize"
