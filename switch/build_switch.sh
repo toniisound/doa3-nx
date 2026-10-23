@@ -5,11 +5,13 @@
 #
 #   ./switch/build_switch.sh            # Release build, 2 jobs
 #   JOBS=3 ./switch/build_switch.sh     # more jobs if WSL has the RAM (~3 GB each)
+#   OPT=-O3 ./switch/build_switch.sh    # lifted code at -O3 (slower build, more RAM)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${DEVKITPRO:=/opt/devkitpro}"
 JOBS="${JOBS:-2}"
+OPT="${OPT:--O2}"
 
 if [[ ! -f "${DEVKITPRO}/cmake/Switch.cmake" ]]; then
     echo "devkitPro not found at ${DEVKITPRO} (install switch-dev: sudo dkp-pacman -S switch-dev)" >&2
@@ -61,6 +63,7 @@ cmake -S "${ROOT}/switch" -B "${ROOT}/build/switch" "${GENERATOR[@]}" \
     -DRECOMP_PROGRAM_DIR="${GENERATED}" \
     -DRECOMP_PROGRAM_MANIFEST_SHA256="${MANIFEST}" \
     -DRECOMP_PROGRAM_EBP_EXPECTED="${EBP}" \
+    -DDOA3_NX_GENERATED_OPT="${OPT}" \
     "${ICON_ARGS[@]}"
 cmake --build "${ROOT}/build/switch" --parallel "${JOBS}" --target doa3-nx_nro
 
