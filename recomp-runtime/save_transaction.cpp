@@ -571,6 +571,10 @@ extern "C" bool recomp_save_initialize(const char *disc_root)
         require(GetFileInformationByHandle(journal_lock, &lock_info) != 0);
         require((lock_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
         require(lock_info.nFileSizeHigh == 0 && lock_info.nFileSizeLow == 0);
+#elif defined(__SWITCH__)
+        /* No lock file: only one process ever runs, and the console's file
+           system keeps a file open for writing from being stat'ed or opened
+           again, which the journal check below does to every entry. */
 #else
         const auto lock_path = journal / "lock";
         if (exists_plain(lock_path)) require(fs::is_regular_file(lock_path));
