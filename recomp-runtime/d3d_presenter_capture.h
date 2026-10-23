@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <new>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -58,16 +57,24 @@ private:
         alignas(8) RecompD3dPresenterCommand value;
         size_t offsets[7];
     };
-    struct Span { size_t size; size_t offset; };
+    // Copied spans by source pointer, for dedup within the packet. Open
+    // addressing in one vector: a node-based multimap cost a heap allocation
+    // per span on the guest thread and a free per span on the render thread,
+    // both behind newlib's single malloc lock.
+    struct SpanSlot { const void *source; size_t size; size_t offset; };
 
     RecompD3dPresenterError addRecord(Kind kind, uint32_t base, uint32_t size);
+    size_t findSpan(const void *source, size_t size) const;
+    void insertSpan(const void *source, size_t size, size_t offset);
+    void eraseSpansFrom(const void *source, size_t first_offset);
 
     std::vector<Entry> entries_;
     std::vector<CapturedCommand> commands_;
     // Word storage keeps indices and vertex data aligned after relocation.
     // resize() appends uninitialized words; add() overwrites the used bytes.
     std::vector<uint64_t, NoInitAllocator<uint64_t>> payload_;
-    std::unordered_multimap<const void *, Span> spans_;
+    std::vector<SpanSlot> span_slots_;
+    size_t span_count_ = 0;
     bool sealed_ = false;
 };
 

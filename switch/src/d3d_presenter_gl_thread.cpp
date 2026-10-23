@@ -11,6 +11,7 @@
 #include <switch.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -47,7 +48,9 @@ struct PresenterThread {
     bool immediate = false;
     bool immediate_dirty = true;
     RecompD3dPresenterError created = RECOMP_D3D_PRESENTER_OK;
-    RecompD3dPresenterError status = RECOMP_D3D_PRESENTER_OK;
+    // Written under the mutex; read lock-free on every draw by both threads
+    // (a contended libnx mutex falls back to a kernel arbitration call).
+    std::atomic<RecompD3dPresenterError> status{RECOMP_D3D_PRESENTER_OK};
     RecompD3dPresenterError destroyed = RECOMP_D3D_PRESENTER_OK;
     unsigned draw_declines = 0;
 
@@ -74,8 +77,7 @@ RecompD3dPresenterError validate(RecompD3dPresenter *presenter)
 
 RecompD3dPresenterError status(PresenterThread &thread)
 {
-    std::lock_guard<std::mutex> lock(thread.mutex);
-    return thread.status;
+    return thread.status.load(std::memory_order_acquire);
 }
 
 void fail(PresenterThread &thread, RecompD3dPresenterError error)
@@ -357,7 +359,7 @@ RecompD3dPresenterError recomp_d3d_presenter_destroy(RecompD3dPresenter **presen
     }
     thread.changed.notify_all();
     joinWorker(thread);
-    const auto pending = thread.status == RECOMP_D3D_PRESENTER_CLOSED ? RECOMP_D3D_PRESENTER_OK : thread.status;
+    const auto pending = thread.status == RECOMP_D3D_PRESENTER_CLOSED ? RECOMP_D3D_PRESENTER_OK : thread.status.load();
     const auto destroyed = thread.destroyed != RECOMP_D3D_PRESENTER_OK ? thread.destroyed : pending;
     delete active_thread;
     active_thread = nullptr;

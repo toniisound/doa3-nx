@@ -1,7 +1,9 @@
 #include "d3d_presenter_capture.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <new>
 #include <stdexcept>
@@ -18,6 +20,17 @@ constexpr const void *Draw::*pointer_fields[] = {
 constexpr uint64_t max_span_bytes = 64u * 1024u * 1024u;
 constexpr size_t null_offset = SIZE_MAX;
 constexpr size_t borrowed_offset = SIZE_MAX - 1u;
+// A removed span slot: lookups probe past it, so chains stay intact.
+const void *const span_tombstone = reinterpret_cast<const void *>(uintptr_t{1});
+
+size_t spanHash(const void *source)
+{
+    uint64_t key = reinterpret_cast<uintptr_t>(source);
+    key ^= key >> 29u;
+    key *= 0xbf58476d1ce4e5b9ull;
+    key ^= key >> 32u;
+    return static_cast<size_t>(key);
+}
 
 /* The backend reads swizzled, compressed and P8 texture bytes only on a cache
    miss, keyed by address and shape, so those stay borrowed from guest RAM;
@@ -90,14 +103,7 @@ RecompD3dPresenterError D3dCapturePacket::add(
                 if (source == nullptr) continue;
 
                 const size_t size = static_cast<size_t>(sizes[i]);
-                const auto range = spans_.equal_range(source);
-                for (auto it = range.first; it != range.second; ++it) {
-                    if (it->second.size == size && (size == 0u ||
-                        std::memcmp(source, payload_.data() + it->second.offset, size) == 0)) {
-                        captured.offsets[i] = it->second.offset;
-                        break;
-                    }
-                }
+                captured.offsets[i] = findSpan(source, size);
                 if (captured.offsets[i] != null_offset) continue;
 
                 const size_t offset = payload_.size();
@@ -108,7 +114,7 @@ RecompD3dPresenterError D3dCapturePacket::add(
                 // The allocator leaves new words uninitialized; define the tail before it can be relocated.
                 payload_[offset + words - 1u] = 0u;
                 if (size != 0u) std::memcpy(payload_.data() + offset, source, size);
-                spans_.emplace(source, Span{size, offset});
+                insertSpan(source, size, offset);
                 inserted_sources[inserted_count++] = source;
                 captured.offsets[i] = offset;
             }
@@ -120,16 +126,60 @@ RecompD3dPresenterError D3dCapturePacket::add(
     }
 
     // Erase only spans from this failed add; rehashing may have moved iterators.
-    for (size_t i = 0u; i < inserted_count; ++i) {
-        const auto range = spans_.equal_range(inserted_sources[i]);
-        for (auto it = range.first; it != range.second;) {
-            if (it->second.offset >= old_payload_size) it = spans_.erase(it);
-            else ++it;
-        }
-    }
+    for (size_t i = 0u; i < inserted_count; ++i) eraseSpansFrom(inserted_sources[i], old_payload_size);
     commands_.resize(old_command_count);
     payload_.resize(old_payload_size);
     return RECOMP_D3D_PRESENTER_OUT_OF_MEMORY;
+}
+
+size_t D3dCapturePacket::findSpan(const void *source, size_t size) const
+{
+    if (span_slots_.empty()) return null_offset;
+    const size_t mask = span_slots_.size() - 1u;
+    for (size_t h = spanHash(source) & mask;; h = (h + 1u) & mask) {
+        const SpanSlot &slot = span_slots_[h];
+        if (slot.source == nullptr) return null_offset;
+        if (slot.source == source && slot.size == size && (size == 0u ||
+            std::memcmp(source, payload_.data() + slot.offset, size) == 0)) {
+            return slot.offset;
+        }
+    }
+}
+
+void D3dCapturePacket::insertSpan(const void *source, size_t size, size_t offset)
+{
+    // Slots used (tombstones included) stay under half the table.
+    if ((span_count_ + 1u) * 2u > span_slots_.size()) {
+        std::vector<SpanSlot> old;
+        old.swap(span_slots_);
+        try {
+            span_slots_.assign(std::max<size_t>(4096u, old.size() * 2u), SpanSlot{nullptr, 0u, 0u});
+        } catch (...) {
+            span_slots_.swap(old);
+            throw;
+        }
+        span_count_ = 0u;
+        for (const SpanSlot &slot : old) {
+            if (slot.source != nullptr && slot.source != span_tombstone) {
+                insertSpan(slot.source, slot.size, slot.offset);
+            }
+        }
+    }
+    const size_t mask = span_slots_.size() - 1u;
+    size_t h = spanHash(source) & mask;
+    while (span_slots_[h].source != nullptr) h = (h + 1u) & mask;
+    span_slots_[h] = SpanSlot{source, size, offset};
+    ++span_count_;
+}
+
+void D3dCapturePacket::eraseSpansFrom(const void *source, size_t first_offset)
+{
+    if (span_slots_.empty()) return;
+    const size_t mask = span_slots_.size() - 1u;
+    for (size_t h = spanHash(source) & mask; span_slots_[h].source != nullptr; h = (h + 1u) & mask) {
+        SpanSlot &slot = span_slots_[h];
+        if (slot.source == source && slot.offset >= first_offset) slot.source = span_tombstone;
+    }
 }
 
 RecompD3dPresenterError D3dCapturePacket::addRecord(
@@ -190,7 +240,10 @@ void D3dCapturePacket::clear()
     entries_.clear();
     commands_.clear();
     payload_.clear();
-    spans_.clear();
+    if (span_count_ != 0u) {
+        std::fill(span_slots_.begin(), span_slots_.end(), SpanSlot{nullptr, 0u, 0u});
+        span_count_ = 0u;
+    }
     sealed_ = false;
 }
 
