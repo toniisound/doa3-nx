@@ -51,6 +51,9 @@
 #define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
 #endif
 
+extern "C" uint64_t doa3_nx_ticks(void);
+extern "C" void doa3_nx_render_stage_add(int stage, uint64_t ticks);
+
 namespace {
 
 constexpr uint32_t kTextureSlots = 4096u;
@@ -77,6 +80,7 @@ struct TextureEntry {
     uint32_t mip_levels = 0;
     uint8_t palette[kPaletteBytes]{};
     uint64_t fingerprint = 0;
+    uint32_t checked_present = UINT32_MAX;  // frame whose draws already matched it
     GLuint texture = 0;
 };
 
@@ -220,6 +224,14 @@ GLint glAddressMode(uint32_t mode)
     default: return GL_REPEAT;
     }
 }
+
+// Render-thread stage timers (profile.cpp), reported once a second.
+struct StageTimer {
+    int stage;
+    uint64_t start;
+    explicit StageTimer(int s) : stage(s), start(doa3_nx_ticks()) {}
+    ~StageTimer() { doa3_nx_render_stage_add(stage, doa3_nx_ticks() - start); }
+};
 
 uint64_t textureFingerprint(const void *bytes, uint32_t count)
 {
@@ -951,6 +963,7 @@ GLuint uploadTexture(RecompD3dPresenter *p, const RecompD3dTextureDesc &desc, co
 
 GLuint prepareTexture(RecompD3dPresenter *p, const RecompD3dPresenterDrawCommand &draw)
 {
+    StageTimer timer(2);
     const RecompD3dTextureDesc &desc = draw.texture;
     if (!draw.has_texture || desc.data == 0u || desc.width == 0u || desc.height == 0u) return 0;
     if (draw.texture_is_backbuffer) {
@@ -982,17 +995,30 @@ GLuint prepareTexture(RecompD3dPresenter *p, const RecompD3dPresenterDrawCommand
 
     const auto cached = p->texture_index.equal_range(desc.data);
     const bool fingerprinted = !linear_bgra && draw.texture_bytes != nullptr;
-    const uint64_t fingerprint = fingerprinted ? textureFingerprint(draw.texture_bytes, draw.texture_byte_count) : 0u;
+    // The fingerprint samples 128 cache-missing words of guest memory; a combat
+    // frame binds the same few textures ~1000 times, so check each once a frame.
+    uint64_t fingerprint = 0u;
+    bool fingerprint_known = false;
+    auto currentFingerprint = [&]() {
+        if (!fingerprint_known) {
+            fingerprint = textureFingerprint(draw.texture_bytes, draw.texture_byte_count);
+            fingerprint_known = true;
+        }
+        return fingerprint;
+    };
     for (auto it = cached.first; it != cached.second; ++it) {
         TextureEntry &entry = p->textures[it->second];
         if (entry.format_byte == desc.format_byte && entry.width == desc.width && entry.height == desc.height &&
             entry.mip_levels == levels &&
             (!palettized || std::memcmp(entry.palette, draw.palette_bytes, kPaletteBytes) == 0)) {
-            if (fingerprinted && entry.fingerprint != fingerprint) {
-                unindexTexture(p, it->second);
-                retireTexture(p, entry);
-                entry.used = false;
-                break;
+            if (fingerprinted && entry.checked_present != p->present_count) {
+                if (entry.fingerprint != currentFingerprint()) {
+                    unindexTexture(p, it->second);
+                    retireTexture(p, entry);
+                    entry.used = false;
+                    break;
+                }
+                entry.checked_present = p->present_count;
             }
             if (linear_bgra && draw.texture_bytes != nullptr && draw.texture_byte_count > 0u) {
                 // Movie frames: queued draws sampled the old contents.
@@ -1065,7 +1091,8 @@ GLuint prepareTexture(RecompD3dPresenter *p, const RecompD3dPresenterDrawCommand
     entry.width = desc.width;
     entry.height = desc.height;
     entry.mip_levels = levels;
-    entry.fingerprint = fingerprint;
+    entry.fingerprint = fingerprinted ? currentFingerprint() : 0u;
+    entry.checked_present = p->present_count;
     entry.texture = texture;
     if (palettized) std::memcpy(entry.palette, draw.palette_bytes, kPaletteBytes);
     p->texture_index.insert({desc.data, slot});
@@ -1221,6 +1248,7 @@ void flushSegment(RecompD3dPresenter *p)
         return;
     }
 
+    uint64_t upload_start = doa3_nx_ticks();
     const uint32_t v_base = ringUpload(p->vertex_buffer, p->vertex_used, kVertexRingBytes,
         seg.vertex_data.data(), v_bytes, 256u);
     const uint32_t i_base = ringUpload(p->index_buffer, p->index_used, kIndexRingBytes,
@@ -1228,6 +1256,8 @@ void flushSegment(RecompD3dPresenter *p)
     const uint32_t u_base = ringUpload(p->uniform_buffer, p->uniform_used, kUniformRingBytes,
         seg.uniform_data.data(), u_bytes, static_cast<uint32_t>(p->uniform_align));
 
+    doa3_nx_render_stage_add(3, doa3_nx_ticks() - upload_start);
+    StageTimer timer(4);
     bindTarget(p, seg.target_color, seg.target_depth);
     glViewport(0, 0, static_cast<GLsizei>(seg.target_w), static_cast<GLsizei>(seg.target_h));
     glDepthRangef(0.0f, 1.0f);
@@ -1406,6 +1436,7 @@ void destroyEgl(RecompD3dPresenter *p)
 
 void presentFrame(RecompD3dPresenter *p)
 {
+    StageTimer timer(5);  // includes the swap, reported separately too
     // Default framebuffer: lower-left origin, so the present pass flips rows.
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     p->bound_target_color = p->bound_target_depth = UINT32_MAX;
@@ -1444,7 +1475,10 @@ void presentFrame(RecompD3dPresenter *p)
         if (error_reports++ < 4u) std::fprintf(stderr, "[gl] error 0x%04x by present %u\n", error, p->present_count);
     }
 
-    eglSwapBuffers(p->display, p->surface);
+    {
+        StageTimer swap_timer(6);
+        eglSwapBuffers(p->display, p->surface);
+    }
 
     if (p->frontbuffer_copy && p->frontbuffer_used) copyMainTo(p, p->frontbuffer_copy);
 }
@@ -1541,7 +1575,7 @@ RecompD3dPresenterError gl_backend_create(const RecompD3dPresenterConfig *config
     p->present_gamma = glGetUniformLocation(p->present_program, "u_gamma");
     glGenVertexArrays(1, &p->empty_vao);
 
-    eglSwapInterval(p->display, 1);
+    eglSwapInterval(p->display, 0);  // see gl_backend_set_immediate_present
     std::fprintf(stderr, "[presenter] gl initialized scale=%.2f resolution=%ux%u window=%ux%u widescreen=%d\n",
         p->scale, main_w, main_h, p->window_w, p->window_h, p->widescreen ? 1 : 0);
     *out = p;
@@ -1554,6 +1588,7 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
 
     switch (command->type) {
     case RECOMP_D3D_PRESENTER_COMMAND_CLEAR: {
+        StageTimer timer(7);
         const auto &clear = command->data.clear;
         if (clear.clear_depth && (!std::isfinite(clear.z) || clear.z < 0.0f || clear.z > 1.0f)) {
             return RECOMP_D3D_PRESENTER_UNSUPPORTED_COMMAND;
@@ -1607,6 +1642,7 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
     }
 
     case RECOMP_D3D_PRESENTER_COMMAND_DRAW: {
+        StageTimer timer(1);
         const auto &draw = command->data.draw;
         if (draw.vertex_bytes == nullptr || draw.index_bytes == nullptr || draw.vertex_stride == 0u ||
             draw.vertex_count == 0u || draw.index_count == 0u ||
@@ -1981,5 +2017,14 @@ void gl_backend_set_immediate_present(RecompD3dPresenter *p, bool enabled)
 {
     if (p == nullptr || p->display == EGL_NO_DISPLAY) return;
     p->immediate = enabled;
-    eglSwapInterval(p->display, enabled ? 0 : 1);
+    // The guest already paces itself to the 60 Hz vblank. A second vsync here
+    // makes the render thread wait a vblank of its own, so a frame that runs a
+    // little long loses a whole extra one. The Switch compositor shows the
+    // latest finished buffer, so interval 0 does not tear. RECOMP_GL_VSYNC=1
+    // restores the old behaviour.
+    static const bool vsync = [] {
+        const char *value = std::getenv("RECOMP_GL_VSYNC");
+        return value != nullptr && value[0] == '1';
+    }();
+    eglSwapInterval(p->display, (enabled || !vsync) ? 0 : 1);
 }

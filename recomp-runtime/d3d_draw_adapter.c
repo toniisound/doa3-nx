@@ -2396,6 +2396,17 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
     draw->directional = result;
 }
 
+#if defined(__SWITCH__)
+/* Switch profiler (switch/src/profile.cpp): time between the steps of a draw. */
+void doa3_nx_stage_begin(void);
+void doa3_nx_stage_mark(int stage);
+#define DRAW_STAGE_BEGIN() doa3_nx_stage_begin()
+#define DRAW_STAGE(n) doa3_nx_stage_mark(n)
+#else
+#define DRAW_STAGE_BEGIN() ((void)0)
+#define DRAW_STAGE(n) ((void)0)
+#endif
+
 /* All three 3925 draw APIs use the same vertex, texture and presenter models.
    ponytail: one stream; admit additional layouts when observed and verified. */
 static void submit_doa3_draw(uint32_t primitive, uint32_t count,
@@ -2409,6 +2420,7 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
     RecompD3dPresenterDrawCommand *draw = &command.data.draw;
     uint16_t *sequential = NULL;
     const char *decline = NULL;
+    DRAW_STAGE_BEGIN();
     if ((fvf & 1u) != 0u) {
         if (!attach_vertex_program(fvf, device, draw)) {
             decline = "doa3-program";
@@ -2440,6 +2452,7 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
     draw->vertex_stride = stride;
     draw->fvf = fvf;
     draw->index_bytes = indices;
+    DRAW_STAGE(0);
     if (!layout.pretransformed && !draw->program_count) {
         if (!compose_world_view_projection(device, draw->transform) ||
             !compose_blend_transforms(device, draw)) {
@@ -2459,6 +2472,7 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
             memcpy(draw->viewport, viewport, sizeof viewport);
         }
     }
+    DRAW_STAGE(1);
     const RecompD3dRenderStateModel *state = recomp_d3d_render_state_adapter_model();
     recomp_d3d_depth_state(state, &draw->depth);
     recomp_d3d_blend_state(state, &draw->blend);
@@ -2472,9 +2486,12 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
         decline = "doa3-target";
         goto finished;
     }
+    DRAW_STAGE(2);
     attach_texture(0u, draw);
     attach_frame_buffer_texture(device, draw);
+    DRAW_STAGE(3);
     attach_doa3_lighting(device, &layout, draw);
+    DRAW_STAGE(4);
     attach_doa3_fog(&layout, draw);
     /* XYZRHW without a diffuse field supplies white, including alpha. */
     if (layout.pretransformed && layout.diffuse_offset == RECOMP_D3D_FVF_ABSENT &&
@@ -2486,8 +2503,10 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
         draw->material_alpha_mode = RECOMP_D3D_MATERIAL_ALPHA_SELECT_DIFFUSE;
         draw->material_alpha = 1.0f;
     }
+    DRAW_STAGE(5);
     if (recomp_d3d_presenter_submit(recomp_d3d_frame_adapter_presenter(), &command) !=
         RECOMP_D3D_PRESENTER_OK) { decline = "doa3-presenter"; goto finished; }
+    DRAW_STAGE(6);
     ++draw_submitted;
     record_fvf(fvf);
     capture_doa3_draw(draw);
@@ -2499,6 +2518,7 @@ finished:
         report_decline(decline);
     }
     free(sequential);
+    DRAW_STAGE(7);
 }
 
 static uint32_t stream_vertices(uint32_t first, uint32_t stride)

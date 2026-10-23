@@ -365,6 +365,12 @@ int main(int argc, char **argv)
         setenv("RECOMP_UNPACED", "1", 1);
         std::fprintf(stderr, "[nx] RECOMP_UNPACED=1 (R held at boot)\n");
     }
+    // L held at boot: the render thread waits for vblank as well (the old
+    // double-vsync behaviour), in case interval 0 tears on some setup.
+    if (held & HidNpadButton_L) {
+        setenv("RECOMP_GL_VSYNC", "1", 1);
+        std::fprintf(stderr, "[nx] RECOMP_GL_VSYNC=1 (L held at boot)\n");
+    }
     std::printf("Modo: %s\n", (held & HidNpadButton_R) ? "sin limite (unpaced)" : "60 Hz");
     std::printf("Arrancando...\n");
     consoleUpdate(nullptr);
