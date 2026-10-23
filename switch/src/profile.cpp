@@ -183,6 +183,9 @@ const char *const stage_names[kStageSets][kStages] = {
 };
 std::atomic<uint64_t> stage_ticks[kStageSets][kStages];
 uint64_t stage_last = 0;  // guest marks only
+constexpr int kCounters = 4;
+const char *const counter_names[kCounters] = {"vtx_kb_full", "vtx_kb_sent", "rebased", "vtx_kb_dedup"};
+std::atomic<uint64_t> counters[kCounters];
 
 } // namespace
 
@@ -198,6 +201,11 @@ void doa3_nx_stage_mark(int stage)
 }
 
 uint64_t doa3_nx_ticks(void) { return now(); }
+
+void doa3_nx_counter_add(int counter, uint64_t value)
+{
+    counters[counter].fetch_add(value, std::memory_order_relaxed);
+}
 
 void doa3_nx_render_stage_add(int stage, uint64_t ticks)
 {
@@ -307,6 +315,18 @@ void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row)
             if (at >= (int)sizeof line) break;
         }
         std::fprintf(stderr, "recomp stages %s:%s\n", set == 0 ? "draw-adapter" : "render-thread", line);
+    }
+    {
+        char line[256];
+        int at = 0;
+        for (int i = 0; i < kCounters; ++i) {
+            const uint64_t v = counters[i].exchange(0, std::memory_order_relaxed);
+            const bool kb = std::strstr(counter_names[i], "_kb") != nullptr;
+            at += std::snprintf(line + at, sizeof line - at, " %s=%.0f", counter_names[i],
+                kb ? v / 1024.0 * per_frame : v * per_frame);
+            if (at >= (int)sizeof line) break;
+        }
+        std::fprintf(stderr, "recomp counters:%s\n", line);
     }
 
     if (console_row < 0) {
