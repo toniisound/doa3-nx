@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -172,9 +173,36 @@ RecompFunction instrument(uint32_t address, RecompFunction target, Kind kind)
     return target;
 }
 
+// Stage timers: the draw adapter (guest thread) marks the boundaries of its
+// steps, the render thread adds the time of its own. Reported per frame.
+constexpr int kStageSets = 2;
+constexpr int kStages = 12;
+const char *const stage_names[kStageSets][kStages] = {
+    {"prep", "xform", "state", "tex", "light", "fog", "submit", "tail", "", "", "", ""},
+    {"exec", "draw", "texture", "upload", "glcalls", "present", "swap", "clear", "", "", "", ""},
+};
+std::atomic<uint64_t> stage_ticks[kStageSets][kStages];
+uint64_t stage_last = 0;  // guest marks only
+
 } // namespace
 
 extern "C" {
+
+void doa3_nx_stage_begin(void) { stage_last = now(); }
+
+void doa3_nx_stage_mark(int stage)
+{
+    const uint64_t t = now();
+    stage_ticks[0][stage].fetch_add(t - stage_last, std::memory_order_relaxed);
+    stage_last = t;
+}
+
+uint64_t doa3_nx_ticks(void) { return now(); }
+
+void doa3_nx_render_stage_add(int stage, uint64_t ticks)
+{
+    stage_ticks[1][stage].fetch_add(ticks, std::memory_order_relaxed);
+}
 
 RecompFunction __real_recomp_lookup_manual(uint32_t guest_address);
 RecompFunction __wrap_recomp_lookup_manual(uint32_t guest_address)
@@ -269,6 +297,17 @@ void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row)
         wall_ms * per_frame, game_ms * per_frame, adapter_ms * per_frame, kernel_ms * per_frame,
         lookup_ms * per_frame, (unsigned long long)(lookup_calls / frames), idle_ms * per_frame,
         (unsigned long long)lost_scopes, top);
+
+    for (int set = 0; set < kStageSets; ++set) {
+        char line[512];
+        int at = 0;
+        for (int i = 0; i < kStages && stage_names[set][i][0]; ++i) {
+            const uint64_t t = stage_ticks[set][i].exchange(0, std::memory_order_relaxed);
+            at += std::snprintf(line + at, sizeof line - at, " %s=%.2f", stage_names[set][i], t * tick_ms * per_frame);
+            if (at >= (int)sizeof line) break;
+        }
+        std::fprintf(stderr, "recomp stages %s:%s\n", set == 0 ? "draw-adapter" : "render-thread", line);
+    }
 
     if (console_row < 0) {
         for (int i = 0; i < slot_count; ++i) {

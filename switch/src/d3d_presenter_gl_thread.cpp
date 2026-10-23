@@ -26,6 +26,9 @@ void doa3_nx_release_console(void);                                             
 void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row);     // profile.cpp
 }
 
+extern "C" uint64_t doa3_nx_ticks(void);
+extern "C" void doa3_nx_render_stage_add(int stage, uint64_t ticks);
+
 namespace {
 
 struct PresenterThread {
@@ -87,6 +90,11 @@ void fail(PresenterThread &thread, RecompD3dPresenterError error)
 
 void execute(PresenterThread &thread, RecompD3dPresenter *backend, const D3dCapturePacket &packet)
 {
+    const uint64_t exec_start = doa3_nx_ticks();
+    struct ExecTimer {
+        uint64_t start;
+        ~ExecTimer() { doa3_nx_render_stage_add(0, doa3_nx_ticks() - start); }
+    } exec_timer{exec_start};
     for (size_t i = 0; i < packet.count(); ++i) {
         if (status(thread) != RECOMP_D3D_PRESENTER_OK) break;
         const auto &record = packet.record(i);
