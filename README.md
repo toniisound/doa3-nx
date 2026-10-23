@@ -62,8 +62,8 @@ cd doa3-nx
    ./switch/build_switch.sh            # JOBS=3 for more parallel jobs
    ```
 
-   Each generated chunk needs about 3 GB of RAM to compile. An optional
-   256x256 `switch/icon.jpg` (not included) becomes the homebrew menu icon.
+   Each generated chunk needs about 3 GB of RAM to compile. The build needs a 256x256 JPEG homebrew menu icon (not included) in
+   `private/icon.jpg`.
 
 ## Installing
 

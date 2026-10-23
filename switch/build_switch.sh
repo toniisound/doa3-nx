@@ -38,10 +38,19 @@ fi
 echo "Program:  ${GENERATED}"
 echo "Manifest: ${MANIFEST} (EBP ${EBP})"
 
-ICON_ARGS=()
-if [[ -f "${ROOT}/switch/icon.jpg" ]]; then
-    ICON_ARGS=(-DDOA3_NX_ICON="${ROOT}/switch/icon.jpg")
+# The homebrew menu icon (256x256 JPEG) is required. It is cover art, so it
+# stays out of git: keep it in private/icon.jpg, which git never touches
+# (switch/icon.jpg also works).
+ICON=""
+for candidate in "${ROOT}/switch/icon.jpg" "${ROOT}/private/icon.jpg"; do
+    if [[ -f "${candidate}" ]]; then ICON="${candidate}"; break; fi
+done
+if [[ -z "${ICON}" ]]; then
+    echo "No icon: copy a 256x256 JPEG to ${ROOT}/private/icon.jpg" >&2
+    exit 1
 fi
+echo "Icon:     ${ICON}"
+ICON_ARGS=(-DDOA3_NX_ICON="${ICON}")
 
 GENERATOR=()
 if command -v ninja >/dev/null 2>&1; then GENERATOR=(-G Ninja); fi
