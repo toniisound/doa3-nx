@@ -100,6 +100,23 @@ bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
     const HidAnalogStickState right = padGetStickPos(pad, 1);
     gamepad->thumb_lx = clamp_axis(left.x);
     gamepad->thumb_ly = clamp_axis(left.y);
+    /* DOA3 moves with the D-pad only, so the left stick also presses it: eight
+       45-degree sectors past a 35% deadzone, so diagonals (crouch-forward and
+       the like) are as easy as on the pad. The stick axes still reach the game. */
+    {
+        const int32_t x = left.x, y = left.y;
+        const int64_t deadzone = 32767 * 35 / 100;
+        if ((int64_t)x * x + (int64_t)y * y > deadzone * deadzone) {
+            const int32_t ax = x < 0 ? -x : x, ay = y < 0 ? -y : y;
+            /* tan(22.5 deg) ~= 0.4142 */
+            if ((int64_t)ax * 10000 > (int64_t)ay * 4142) {
+                gamepad->buttons |= x > 0 ? XBOX_DPAD_RIGHT : XBOX_DPAD_LEFT;
+            }
+            if ((int64_t)ay * 10000 > (int64_t)ax * 4142) {
+                gamepad->buttons |= y > 0 ? XBOX_DPAD_UP : XBOX_DPAD_DOWN;
+            }
+        }
+    }
     gamepad->thumb_rx = clamp_axis(right.x);
     gamepad->thumb_ry = clamp_axis(right.y);
     return true;
