@@ -226,12 +226,29 @@ RecompFunction __wrap_recomp_lookup_kernel(uint32_t guest_address)
 
 // Indirect calls in the lifted code resolve their target here first.
 RecompFunction __real_recomp_program_lookup(uint32_t guest_address);
+
+// ~5000 indirect calls a frame each walked the manual, generated and kernel
+// tables. Targets of a static recompilation never move, so a direct-mapped
+// cache answers almost all of them. Misses (and NULL results) take the slow
+// path; only the guest thread fills the cache.
+namespace {
+constexpr uint32_t kLookupCacheSize = 8192u;
+struct LookupCacheEntry { uint32_t address; RecompFunction function; };
+LookupCacheEntry lookup_cache[kLookupCacheSize];
+}
+
 RecompFunction __wrap_recomp_program_lookup(uint32_t guest_address)
 {
     if (!onGuestThread()) return __real_recomp_program_lookup(guest_address);
+    LookupCacheEntry &entry = lookup_cache[(guest_address ^ (guest_address >> 13)) & (kLookupCacheSize - 1u)];
+    if (entry.function != nullptr && entry.address == guest_address) {
+        ++lookup_calls;
+        return entry.function;
+    }
     enter(-2);
     RecompFunction function = __real_recomp_program_lookup(guest_address);
     leave();
+    if (function != nullptr) entry = LookupCacheEntry{guest_address, function};
     return function;
 }
 
