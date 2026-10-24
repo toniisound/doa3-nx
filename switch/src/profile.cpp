@@ -24,12 +24,18 @@
 #include <utility>
 
 typedef void (*RecompFunction)(void);
+// Layout of runtime.h's RecompFunctionEntry.
+struct RecompFunctionEntryView { uint32_t address; RecompFunction function; };
 extern "C" void *recomp_native_fiber_current(void);
 
 namespace {
 
 constexpr int kSlots = 384;
+#if defined(DOA3_NX_FUNC_PROFILE)
+constexpr int kDepth = 1024;  // lifted call chains nest deeply
+#else
 constexpr int kDepth = 64;
+#endif
 constexpr int kFibers = 32;
 
 enum Kind : uint8_t { KIND_ADAPTER, KIND_KERNEL };
@@ -45,7 +51,8 @@ struct Slot {
 struct Scope {
     uint64_t start;
     uint64_t child;
-    int slot; // -1 idle, -2 lookup, otherwise slot index
+    int slot; // -1 idle, -2 lookup, -3 lifted function, otherwise slot index
+    uint32_t func; // lifted function index when slot == -3
 };
 
 struct FiberStack {
@@ -62,6 +69,32 @@ bool tables_ready = false;
 FiberStack fiber_stacks[kFibers];
 FiberStack *current_stack = &fiber_stacks[0];
 Handle guest_thread = INVALID_HANDLE;
+
+#if defined(DOA3_NX_FUNC_PROFILE)
+// Diagnostic build: every lifted function (-finstrument-functions on the
+// generated chunks) is a scope, so the "game" time splits per function.
+constexpr uint32_t kFuncs = 32768u;
+struct FuncStat { void *fn; uint64_t ticks; uint64_t calls; };
+FuncStat funcs[kFuncs];
+uint32_t func_index[kFuncs * 2u]; // open addressing on fn, 0 empty, else index + 1
+uint32_t func_count = 0;
+uint64_t func_overflow = 0;
+
+__attribute__((no_instrument_function)) uint32_t funcFor(void *fn)
+{
+    uint64_t h = reinterpret_cast<uintptr_t>(fn);
+    h = (h ^ (h >> 17)) * 0x9e3779b97f4a7c15ull;
+    for (uint32_t i = static_cast<uint32_t>(h >> 40) & (kFuncs * 2u - 1u);; i = (i + 1u) & (kFuncs * 2u - 1u)) {
+        if (func_index[i] == 0u) {
+            if (func_count == kFuncs) { ++func_overflow; return 0u; }
+            funcs[func_count].fn = fn;
+            func_index[i] = ++func_count;
+            return func_count - 1u;
+        }
+        if (funcs[func_index[i] - 1u].fn == fn) return func_index[i] - 1u;
+    }
+}
+#endif
 
 uint64_t idle_ticks = 0;
 uint64_t lookup_ticks = 0;
@@ -104,7 +137,7 @@ inline void enter(int slot)
         ++lost_scopes;
         return;
     }
-    stack->scopes[stack->depth++] = Scope{now(), 0, slot};
+    stack->scopes[stack->depth++] = Scope{now(), 0, slot, 0u};
 }
 
 inline void leave()
@@ -122,6 +155,11 @@ inline void leave()
         ++slots[scope.slot].calls;
     } else if (scope.slot == -1) {
         idle_ticks += exclusive;
+#if defined(DOA3_NX_FUNC_PROFILE)
+    } else if (scope.slot == -3) {
+        funcs[scope.func].ticks += exclusive;
+        ++funcs[scope.func].calls;
+#endif
     } else {
         lookup_ticks += exclusive;
         ++lookup_calls;
@@ -311,6 +349,31 @@ int __wrap_nanosleep(const struct timespec *request, struct timespec *remaining)
     return rc;
 }
 
+#if defined(DOA3_NX_FUNC_PROFILE)
+__attribute__((no_instrument_function)) void __cyg_profile_func_enter(void *fn, void *)
+{
+    if (!onGuestThread()) return;
+    FiberStack *stack = current_stack;
+    if (stack->depth >= kDepth) { ++lost_scopes; return; }
+    stack->scopes[stack->depth++] = Scope{now(), 0, -3, funcFor(fn)};
+}
+
+__attribute__((no_instrument_function)) void __cyg_profile_func_exit(void *, void *)
+{
+    if (!onGuestThread()) return;
+    leave();
+}
+#endif
+
+static const RecompFunctionEntryView *function_table = nullptr;
+static size_t function_table_count = 0;
+
+void doa3_nx_profile_set_functions(const void *entries, size_t count)
+{
+    function_table = static_cast<const RecompFunctionEntryView *>(entries);
+    function_table_count = count;
+}
+
 // The guest runs on the thread that calls recomp_runner_main.
 void doa3_nx_profile_start(void)
 {
@@ -382,6 +445,43 @@ void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row)
         }
         std::fprintf(stderr, "recomp counters:%s\n", line);
     }
+#if defined(DOA3_NX_FUNC_PROFILE)
+    {
+        constexpr int kTop = 20;
+        uint32_t best[kTop];
+        int shown = 0;
+        for (uint32_t i = 0; i < func_count; ++i) {
+            if (funcs[i].ticks == 0) continue;
+            int at;
+            if (shown < kTop) {
+                at = shown++;
+            } else {
+                at = kTop - 1;
+                if (funcs[i].ticks <= funcs[best[at]].ticks) continue;
+            }
+            best[at] = i;
+            while (at > 0 && funcs[best[at]].ticks > funcs[best[at - 1]].ticks) {
+                std::swap(best[at], best[at - 1]);
+                --at;
+            }
+        }
+        char line[1400];
+        int at = 0;
+        for (int i = 0; i < shown; ++i) {
+            const FuncStat &f = funcs[best[i]];
+            uint32_t guest = 0;
+            for (size_t k = 0; k < function_table_count; ++k) {
+                if (reinterpret_cast<void *>(function_table[k].function) == f.fn) { guest = function_table[k].address; break; }
+            }
+            at += std::snprintf(line + at, sizeof line - at, " %08x=%.2fms/%llu", (unsigned)guest,
+                f.ticks * tick_ms * per_frame, (unsigned long long)(f.calls / frames));
+            if (at >= (int)sizeof line) break;
+        }
+        std::fprintf(stderr, "recomp lifted top:%s (functions=%u overflow=%llu)\n", line, func_count,
+            (unsigned long long)func_overflow);
+        for (uint32_t i = 0; i < func_count; ++i) { funcs[i].ticks = 0; funcs[i].calls = 0; }
+    }
+#endif
 
     if (console_row < 0) {
         for (int i = 0; i < slot_count; ++i) {

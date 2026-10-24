@@ -259,8 +259,16 @@ set_source_files_properties("${RUNTIME}/runner.cpp" PROPERTIES
 # The generated chunks are ~140k lines each; -O2 keeps the build time sane
 # while still giving the register allocation the lifted code needs.
 set(DOA3_NX_GENERATED_OPT "-O2" CACHE STRING "Optimization level of the lifted program chunks")
+option(DOA3_NX_FUNC_PROFILE "Time every lifted function (diagnostic build, slower)" OFF)
+if(DOA3_NX_FUNC_PROFILE)
+    # Runtime headers' inline helpers (guest memory access...) stay untimed.
+    set(_func_profile_flags ";-finstrument-functions;-finstrument-functions-exclude-file-list=recomp-runtime,devkitpro,include")
+    target_compile_definitions(doa3-nx PRIVATE DOA3_NX_FUNC_PROFILE)
+else()
+    set(_func_profile_flags "")
+endif()
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
-    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w")
+    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w${_func_profile_flags}")
 # Direct (not GOT) access to globals from C, and libm calls such as sqrt
 # inlined as instructions: errno is never read after them.
 target_compile_options(doa3-nx PRIVATE
