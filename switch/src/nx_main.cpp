@@ -365,6 +365,15 @@ int main(int argc, char **argv)
         setenv("RECOMP_UNPACED", "1", 1);
         std::fprintf(stderr, "[nx] RECOMP_UNPACED=1 (R held at boot)\n");
     }
+    // A frame a little over 16.7 ms starts the next one at once instead of
+    // waiting a whole refresh (see d3d_vblank.cpp). ZL held at boot keeps the
+    // strict Xbox refresh, which drops to 30 fps in the heaviest scenes.
+    if (held & HidNpadButton_ZL) {
+        std::fprintf(stderr, "[nx] strict vblank (ZL held at boot)\n");
+    } else {
+        setenv("RECOMP_SOFT_VBLANK", "1", 1);
+        std::fprintf(stderr, "[nx] RECOMP_SOFT_VBLANK=1\n");
+    }
     // L held at boot: the render thread waits for vblank as well (the old
     // double-vsync behaviour), in case interval 0 tears on some setup.
     if (held & HidNpadButton_L) {
