@@ -268,7 +268,7 @@ int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     return rc;
 }
 
-// Until the presenter takes the screen, a heartbeat shows the boot is alive.
+// The console is kept (black, no text) until the presenter takes the screen.
 static Mutex console_mutex;
 static bool presenter_owns_console = false;
 
@@ -292,31 +292,7 @@ void doa3_nx_release_console(void)
     std::fprintf(stderr, "[nx] text console released for the renderer\n");
 }
 
-static Thread heartbeat_thread;
-uint64_t doa3_nx_kernel_calls(void); // boot_trace.cpp
 void doa3_nx_profile_start(void);     // profile.cpp
-
-static void heartbeat(void *arg)
-{
-    (void)arg;
-    const u64 start = armGetSystemTick();
-    for (;;) {
-        svcSleepThread(500'000'000);
-        mutexLock(&console_mutex);
-        if (presenter_owns_console || !console_ready) {
-            mutexUnlock(&console_mutex);
-            return;
-        }
-        const double seconds = armTicksToNs(armGetSystemTick() - start) / 1e9;
-        char line[sizeof last_line];
-        std::memcpy(line, last_line, sizeof line);
-        line[sizeof line - 1] = '\0';
-        std::printf("\x1b[6;1HArrancando... %5.1f s   llamadas al kernel: %llu\x1b[K\n\x1b[K%.78s\n",
-            seconds, (unsigned long long)doa3_nx_kernel_calls(), line);
-        consoleUpdate(nullptr);
-        mutexUnlock(&console_mutex);
-    }
-}
 
 // exit() is wrapped at link time (-Wl,--wrap=exit): a runtime stop with a
 // nonzero code stays on screen instead of dropping back to the menu.
@@ -343,8 +319,10 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "DOA3 NX %s (Toniisound), based on NoRain211/doa3-re\n",
         DOA3_NX_VERSION);
 
-    std::printf("DOA3 NX %s\n\n", DOA3_NX_VERSION);
+    // The boot stays on a black screen until the intro; the console only
+    // shows text for a missing disc or a stop (see __wrap_exit).
     if (!fileExists(kXbe)) {
+        std::printf("DOA3 NX %s\n\n", DOA3_NX_VERSION);
         std::printf("No se encuentra %s\n\n", kXbe);
         std::printf("Copia el contenido del disco USA de Dead or Alive 3\n");
         std::printf("(extraido con extract-xiso) en %s/\n", kDisc);
@@ -380,14 +358,8 @@ int main(int argc, char **argv)
         setenv("RECOMP_GL_VSYNC", "1", 1);
         std::fprintf(stderr, "[nx] RECOMP_GL_VSYNC=1 (L held at boot)\n");
     }
-    std::printf("Modo: %s\n", (held & HidNpadButton_R) ? "sin limite (unpaced)" : "60 Hz");
-    std::printf("Arrancando...\n");
     consoleUpdate(nullptr);
     mutexInit(&console_mutex);
-    if (R_SUCCEEDED(threadCreate(&heartbeat_thread, heartbeat, nullptr, nullptr,
-            0x10000, 0x2D, 1))) {
-        threadStart(&heartbeat_thread);
-    }
 
     // The runner resolves D:\ against the folder holding default.xbe.
     chdir(kRoot);
