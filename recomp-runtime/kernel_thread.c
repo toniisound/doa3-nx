@@ -422,6 +422,12 @@ void recomp_kernel_wait_for_vblank(uint64_t deadline_ns)
     if (!thread_ready(thread)) schedule();
 }
 
+/* Gives ready peers a turn, as NtYieldExecution does. */
+void recomp_kernel_yield(void)
+{
+    if (scheduler_started) schedule();
+}
+
 static uint32_t wait_objects(uint32_t count, const uint32_t *objects,
     bool wait_all, bool alertable, uint32_t timeout)
 {

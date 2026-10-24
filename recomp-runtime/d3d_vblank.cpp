@@ -8,11 +8,13 @@
 #endif
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <memory>
 #include <thread>
 
 extern "C" void recomp_kernel_wait_for_vblank(uint64_t deadline_ns);
+extern "C" void recomp_kernel_yield(void);
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -90,6 +92,24 @@ void recomp_d3d_wait_vblank(void)
     // Every waiter in this refresh interval observes the same vblank.
     // Keep the deadline local across guest switches and nested waits.
     const auto now = guest_now();
+#if defined(__SWITCH__)
+    // RECOMP_SOFT_VBLANK=1 (the Switch default): a frame that misses the
+    // refresh by less than a quarter interval starts the next one at once
+    // instead of waiting a whole extra refresh. DOA3 then slows down slightly
+    // in its heaviest moments (as on hardware that drops a frame) rather than
+    // falling to 30 fps, where it runs its logic twice a frame and can never
+    // catch up again.
+    static const bool soft = [] {
+        const char *value = std::getenv("RECOMP_SOFT_VBLANK");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (soft && last_vblank + interval <= now && now < last_vblank + interval + interval / 4) {
+        last_vblank = now;
+        if (completed_vblank < now) completed_vblank = now;
+        recomp_kernel_yield();  // peers that run while the main thread waits a refresh
+        return;
+    }
+#endif
     if (last_vblank <= now) {
         last_vblank += interval * ((now - last_vblank) / interval + 1);
     }
