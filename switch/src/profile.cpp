@@ -189,6 +189,42 @@ std::atomic<uint64_t> counters[kCounters];
 
 } // namespace
 
+// CPU / GPU / memory clocks, to tell a slow frame from an unclocked console
+// (sys-clk profiles apply per title and per docked/handheld state).
+namespace {
+uint32_t readClockMhz(PcvModule legacy, PcvModuleId module)
+{
+    u32 hz = 0;
+    if (hosversionAtLeast(8, 0, 0)) {
+        ClkrstSession session;
+        if (R_SUCCEEDED(clkrstOpenSession(&session, module, 3))) {
+            if (R_FAILED(clkrstGetClockRate(&session, &hz))) hz = 0;
+            clkrstCloseSession(&session);
+        }
+    } else if (R_FAILED(pcvGetClockRate(legacy, &hz))) {
+        hz = 0;
+    }
+    return hz / 1000000u;
+}
+
+void logClocks()
+{
+    static bool ready = false, tried = false;
+    if (!tried) {
+        tried = true;
+        ready = hosversionAtLeast(8, 0, 0) ? R_SUCCEEDED(clkrstInitialize()) : R_SUCCEEDED(pcvInitialize());
+    }
+    if (!ready) {
+        std::fprintf(stderr, "recomp clocks: unavailable\n");
+        return;
+    }
+    std::fprintf(stderr, "recomp clocks: cpu=%uMHz gpu=%uMHz mem=%uMHz\n",
+        readClockMhz(PcvModule_CpuBus, PcvModuleId_CpuBus), readClockMhz(PcvModule_GPU, PcvModuleId_GPU),
+        readClockMhz(PcvModule_EMC, PcvModuleId_EMC));
+}
+uint32_t reports = 0;
+}
+
 extern "C" {
 
 void doa3_nx_stage_begin(void) { stage_last = now(); }
@@ -289,6 +325,7 @@ void doa3_nx_profile_start(void)
 void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row)
 {
     if (frames == 0) return;
+    if (reports++ % 10u == 0u) logClocks();
     const double tick_ms = 1000.0 / armGetSystemTickFreq();
     const double per_frame = 1.0 / frames;
 
