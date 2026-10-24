@@ -55,6 +55,19 @@ void copyCommand(RecompD3dPresenterCommand &to, const RecompD3dPresenterCommand 
     constexpr size_t tail = offsetof(Draw, program_alpha_mask);
     to.type = from.type;
     std::memcpy(&to.data.draw, &from.data.draw, head);
+#if defined(__SWITCH__)
+    // The OpenGL backend reads the 1.3 KiB lighting block only when enabled.
+    if (!from.data.draw.directional.enabled) {
+        constexpr size_t light = offsetof(Draw, directional);
+        constexpr size_t after = light + sizeof(Draw::directional);
+        auto *to_bytes = reinterpret_cast<char *>(&to.data.draw);
+        const auto *from_bytes = reinterpret_cast<const char *>(&from.data.draw);
+        std::memcpy(to_bytes + tail, from_bytes + tail, light - tail);
+        to.data.draw.directional.enabled = false;
+        std::memcpy(to_bytes + after, from_bytes + after, sizeof(Draw) - after);
+        return;
+    }
+#endif
     std::memcpy(reinterpret_cast<char *>(&to.data.draw) + tail,
         reinterpret_cast<const char *>(&from.data.draw) + tail, sizeof(Draw) - tail);
 }
