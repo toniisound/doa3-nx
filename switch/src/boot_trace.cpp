@@ -44,11 +44,13 @@ bool __wrap_recomp_save_initialize(const char *disc_root)
 void __real_recomp_runtime_init(const RecompMemoryRegion *regions, size_t region_count,
     RecompMemoryAccess *accesses, size_t access_capacity,
     const RecompFunctionEntry *functions, size_t function_count);
+void doa3_nx_profile_set_functions(const void *entries, size_t count); // profile.cpp
 void __wrap_recomp_runtime_init(const RecompMemoryRegion *regions, size_t region_count,
     RecompMemoryAccess *accesses, size_t access_capacity,
     const RecompFunctionEntry *functions, size_t function_count)
 {
     std::fprintf(stderr, "[boot] xbe mapped; runtime init\n");
+    doa3_nx_profile_set_functions(functions, function_count);
     __real_recomp_runtime_init(regions, region_count, accesses, access_capacity,
         functions, function_count);
 }
