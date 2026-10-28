@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <utility>
 
 typedef void (*RecompFunction)(void);
@@ -365,6 +366,30 @@ __attribute__((no_instrument_function)) void __cyg_profile_func_exit(void *, voi
 }
 #endif
 
+#if defined(DOA3_NX_FUNC_PROFILE)
+RecompFunction recomp_lookup(uint32_t guest_address); // generated dispatch
+extern char __start__[];                              // libnx: image base
+
+// The full program has no function table, so the guest addresses come from
+// asking the dispatch about every address of the XBE's code once (about a
+// second, at the first report of a diagnostic build).
+static uint32_t guestAddressOf(void *fn)
+{
+    static std::unordered_map<void *, uint32_t> *reverse = nullptr;
+    if (reverse == nullptr) {
+        reverse = new std::unordered_map<void *, uint32_t>();
+        reverse->reserve(1u << 15);
+        for (uint32_t address = 0x00010000u; address < 0x00400000u; ++address) {
+            RecompFunction function = recomp_lookup(address);
+            if (function != nullptr) reverse->emplace(reinterpret_cast<void *>(function), address);
+        }
+        std::fprintf(stderr, "recomp lifted: %zu dispatch entries mapped\n", reverse->size());
+    }
+    const auto it = reverse->find(fn);
+    return it == reverse->end() ? 0u : it->second;
+}
+#endif
+
 static const RecompFunctionEntryView *function_table = nullptr;
 static size_t function_table_count = 0;
 
@@ -469,12 +494,16 @@ void doa3_nx_profile_report(uint32_t frames, double wall_ms, int console_row)
         int at = 0;
         for (int i = 0; i < shown; ++i) {
             const FuncStat &f = funcs[best[i]];
-            uint32_t guest = 0;
-            for (size_t k = 0; k < function_table_count; ++k) {
-                if (reinterpret_cast<void *>(function_table[k].function) == f.fn) { guest = function_table[k].address; break; }
+            const uint32_t guest = guestAddressOf(f.fn);
+            if (guest != 0u) {
+                at += std::snprintf(line + at, sizeof line - at, " %08x=%.2fms/%llu", (unsigned)guest,
+                    f.ticks * tick_ms * per_frame, (unsigned long long)(f.calls / frames));
+            } else {
+                // Not a dispatch entry: the offset in the NRO, for build/switch/doa3-nx.map.
+                at += std::snprintf(line + at, sizeof line - at, " +%lx=%.2fms/%llu",
+                    (unsigned long)(reinterpret_cast<uintptr_t>(f.fn) - reinterpret_cast<uintptr_t>(__start__)),
+                    f.ticks * tick_ms * per_frame, (unsigned long long)(f.calls / frames));
             }
-            at += std::snprintf(line + at, sizeof line - at, " %08x=%.2fms/%llu", (unsigned)guest,
-                f.ticks * tick_ms * per_frame, (unsigned long long)(f.calls / frames));
             if (at >= (int)sizeof line) break;
         }
         std::fprintf(stderr, "recomp lifted top:%s (functions=%u overflow=%llu)\n", line, func_count,
