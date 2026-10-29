@@ -1038,7 +1038,12 @@ GLuint prepareTexture(RecompD3dPresenter *p, const RecompD3dPresenterDrawCommand
         if (entry.format_byte == desc.format_byte && entry.width == desc.width && entry.height == desc.height &&
             entry.mip_levels == levels &&
             (!palettized || std::memcmp(entry.palette, draw.palette_bytes, kPaletteBytes) == 0)) {
-            if (fingerprinted && entry.checked_present != p->present_count) {
+            // RECOMP_GL_TEXCHECK_ALWAYS=1 (Y held at boot): check on every draw again.
+            static const bool check_always = [] {
+                const char *value = std::getenv("RECOMP_GL_TEXCHECK_ALWAYS");
+                return value != nullptr && value[0] == '1';
+            }();
+            if (fingerprinted && (check_always || entry.checked_present != p->present_count)) {
                 if (entry.fingerprint != currentFingerprint()) {
                     unindexTexture(p, it->second);
                     retireTexture(p, entry);

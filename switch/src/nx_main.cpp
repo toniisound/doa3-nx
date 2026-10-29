@@ -31,6 +31,8 @@
 int recomp_runner_main(int argc, char **argv); // runner.cpp main, renamed at compile time
 extern "C" void __real_exit(int code) __attribute__((noreturn));
 
+extern "C" int doa3_nx_native_enabled; // doa3_nx_math.c
+
 extern "C" {
 static void flushLog(void); // below, with the log devoptab
 }
@@ -351,6 +353,16 @@ int main(int argc, char **argv)
     } else {
         setenv("RECOMP_SOFT_VBLANK", "1", 1);
         std::fprintf(stderr, "[nx] RECOMP_SOFT_VBLANK=1\n");
+    }
+    // Diagnostics, held at boot: X runs the lifted math helpers instead of the
+    // native ones; Y checks cached textures on every draw instead of once a frame.
+    if (held & HidNpadButton_X) {
+        doa3_nx_native_enabled = 0;
+        std::fprintf(stderr, "[nx] native math off (X held at boot)\n");
+    }
+    if (held & HidNpadButton_Y) {
+        setenv("RECOMP_GL_TEXCHECK_ALWAYS", "1", 1);
+        std::fprintf(stderr, "[nx] RECOMP_GL_TEXCHECK_ALWAYS=1 (Y held at boot)\n");
     }
     // L held at boot: the render thread waits for vblank as well (the old
     // double-vsync behaviour), in case interval 0 tears on some setup.
