@@ -23,6 +23,15 @@ __attribute__((weak)) int futimens(int fd, const struct timespec times[2])
     return 0;
 }
 
+__attribute__((weak)) int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags)
+{
+    (void)dirfd;
+    (void)path;
+    (void)times;
+    (void)flags;
+    return 0;
+}
+
 /* C11 timespec_get: newlib declares it, devkitA64 does not implement it. */
 __attribute__((weak)) int timespec_get(struct timespec *ts, int base)
 {
