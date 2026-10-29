@@ -288,9 +288,16 @@ void doa3_nx_render_stage_add(int stage, uint64_t ticks)
 }
 
 RecompFunction __real_recomp_lookup_manual(uint32_t guest_address);
+RecompFunction doa3_nx_native_lookup(uint32_t guest_address); // doa3_nx_math.c
+
 RecompFunction __wrap_recomp_lookup_manual(uint32_t guest_address)
 {
-    return instrument(guest_address, __real_recomp_lookup_manual(guest_address), KIND_ADAPTER);
+    RecompFunction function = __real_recomp_lookup_manual(guest_address);
+#if !defined(DOA3_NX_NATIVE_OFF)
+    // Indirect calls to the native math helpers (direct calls: doa3_nx_native.h).
+    if (function == nullptr) function = doa3_nx_native_lookup(guest_address);
+#endif
+    return instrument(guest_address, function, KIND_ADAPTER);
 }
 
 RecompFunction __real_recomp_lookup_kernel(uint32_t guest_address);

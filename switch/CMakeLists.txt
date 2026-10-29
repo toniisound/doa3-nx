@@ -238,6 +238,7 @@ add_executable(doa3-nx
     "${NX_SRC}/profile.cpp"
     "${NX_SRC}/input_host_switch.c"
     "${NX_SRC}/audio_output_switch.cpp"
+    "${NX_SRC}/doa3_nx_math.c"
     ${DOA3_NX_PRESENTER_SOURCES}
     "${_missing_source}"
     ${_recomp_program_sources}
@@ -267,8 +268,19 @@ if(DOA3_NX_FUNC_PROFILE)
 else()
     set(_func_profile_flags "")
 endif()
+# doa3_nx_native.h routes direct calls to the hottest math helpers to the
+# native versions in src/doa3_nx_math.c (DOA3_NX_NATIVE=OFF keeps the lifted ones).
+option(DOA3_NX_NATIVE "Native versions of DOA3's hottest math helpers" ON)
+if(DOA3_NX_NATIVE)
+    set(_native_flags ";-include;${CMAKE_CURRENT_SOURCE_DIR}/include/doa3_nx_native.h")
+else()
+    set(_native_flags "")
+    target_compile_definitions(doa3-nx PRIVATE DOA3_NX_NATIVE_OFF)
+endif()
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
-    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w${_func_profile_flags}")
+    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w${_func_profile_flags}${_native_flags}")
+# x87 rounding: no fused multiply-add in the native math.
+set_source_files_properties("${NX_SRC}/doa3_nx_math.c" PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
 # Direct (not GOT) access to globals from C, and libm calls such as sqrt
 # inlined as instructions: errno is never read after them.
 target_compile_options(doa3-nx PRIVATE

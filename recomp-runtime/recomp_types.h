@@ -68,7 +68,10 @@ extern uint32_t g_recomp_7c7c0_origin;
    dereference reads the TIB; move it to a real fs base to trap null. */
 #define XBOX_FS_BASE 0u
 
+/* A host may route some direct calls elsewhere (Switch: doa3_nx_native.h). */
+#ifndef RECOMP_ABI_CALL
 #define RECOMP_ABI_CALL(va, fn) (fn)()
+#endif
 #define RECOMP_ICALL_SAFE_AT(address, saved_esp, site) \
     RECOMP_ICALL_SAFE(address, saved_esp)
 
