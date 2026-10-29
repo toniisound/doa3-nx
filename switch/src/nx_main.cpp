@@ -311,6 +311,51 @@ void __wrap_exit(int code)
 
 } // extern "C"
 
+namespace {
+
+const char kOptions[] = "sdmc:/switch/doa3-nx/doa3-nx.ini";
+
+struct BootOptions {
+    bool native_math = true;
+    bool soft_vblank = true;
+    bool texcheck_always = false;
+    bool gl_vsync = false;
+    bool unpaced = false;
+};
+
+BootOptions readOptions()
+{
+    BootOptions options;
+    FILE *file = std::fopen(kOptions, "r");
+    if (file == nullptr) {
+        if (FILE *out = std::fopen(kOptions, "w")) {
+            std::fputs("; DOA3 NX options (1 = on, 0 = off). Holding a button at boot also\n"
+                "; switches one for that run: X native_math off, Y texcheck_always on,\n"
+                "; ZL soft_vblank off, L gl_vsync on, R unpaced on.\n"
+                "native_math=1\nsoft_vblank=1\ntexcheck_always=0\ngl_vsync=0\nunpaced=0\n", out);
+            std::fclose(out);
+        }
+        return options;
+    }
+    char line[128];
+    while (std::fgets(line, sizeof line, file)) {
+        char key[64];
+        int value = 0;
+        if (line[0] == ';' || line[0] == '#') continue;
+        if (std::sscanf(line, " %63[a-z_] = %d", key, &value) != 2) continue;
+        const bool on = value != 0;
+        if (!std::strcmp(key, "native_math")) options.native_math = on;
+        else if (!std::strcmp(key, "soft_vblank")) options.soft_vblank = on;
+        else if (!std::strcmp(key, "texcheck_always")) options.texcheck_always = on;
+        else if (!std::strcmp(key, "gl_vsync")) options.gl_vsync = on;
+        else if (!std::strcmp(key, "unpaced")) options.unpaced = on;
+    }
+    std::fclose(file);
+    return options;
+}
+
+} // namespace
+
 int main(int argc, char **argv)
 {
     (void)argc;
@@ -334,49 +379,43 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    // Held at boot: R runs unpaced (as fast as the CPU allows, to measure
-    // headroom above 60 fps). There is no CPU boost: boost mode would drop the
-    // GPU to 76.8 MHz. Clock the console with sys-clk instead.
-    // The first samples after boot can still be empty: read the pad for a
-    // quarter second and keep every button seen held.
+    // Options: sdmc:/switch/doa3-nx/doa3-nx.ini (written with the defaults on
+    // the first run), or the same switches held at boot.
+    BootOptions options = readOptions();
+
+    // The first samples after boot can be empty: read the pad for half a
+    // second, letting applet messages through, and keep every button seen.
     PadState pad;
     padInitializeDefault(&pad);
     u64 held = 0;
-    for (int i = 0; i < 15; ++i) {
+    for (int i = 0; i < 30; ++i) {
+        appletMainLoop();
         padUpdate(&pad);
         held |= padGetButtons(&pad);
         svcSleepThread(16'000'000);
     }
     std::fprintf(stderr, "[nx] buttons held at boot: 0x%llx\n", (unsigned long long)held);
-    if (held & HidNpadButton_R) {
-        setenv("RECOMP_UNPACED", "1", 1);
-        std::fprintf(stderr, "[nx] RECOMP_UNPACED=1 (R held at boot)\n");
-    }
-    // A frame a little over 16.7 ms starts the next one at once instead of
-    // waiting a whole refresh (see d3d_vblank.cpp). ZL held at boot keeps the
-    // strict Xbox refresh, which drops to 30 fps in the heaviest scenes.
-    if (held & HidNpadButton_ZL) {
-        std::fprintf(stderr, "[nx] strict vblank (ZL held at boot)\n");
-    } else {
-        setenv("RECOMP_SOFT_VBLANK", "1", 1);
-        std::fprintf(stderr, "[nx] RECOMP_SOFT_VBLANK=1\n");
-    }
-    // Diagnostics, held at boot: X runs the lifted math helpers instead of the
-    // native ones; Y checks cached textures on every draw instead of once a frame.
-    if (held & HidNpadButton_X) {
-        doa3_nx_native_enabled = 0;
-        std::fprintf(stderr, "[nx] native math off (X held at boot)\n");
-    }
-    if (held & HidNpadButton_Y) {
-        setenv("RECOMP_GL_TEXCHECK_ALWAYS", "1", 1);
-        std::fprintf(stderr, "[nx] RECOMP_GL_TEXCHECK_ALWAYS=1 (Y held at boot)\n");
-    }
-    // L held at boot: the render thread waits for vblank as well (the old
-    // double-vsync behaviour), in case interval 0 tears on some setup.
-    if (held & HidNpadButton_L) {
-        setenv("RECOMP_GL_VSYNC", "1", 1);
-        std::fprintf(stderr, "[nx] RECOMP_GL_VSYNC=1 (L held at boot)\n");
-    }
+    if (held & HidNpadButton_R) options.unpaced = true;
+    if (held & HidNpadButton_ZL) options.soft_vblank = false;
+    if (held & HidNpadButton_X) options.native_math = false;
+    if (held & HidNpadButton_Y) options.texcheck_always = true;
+    if (held & HidNpadButton_L) options.gl_vsync = true;
+
+    // unpaced: as fast as the CPU allows, to measure headroom above 60 fps.
+    // There is no CPU boost: boost mode would drop the GPU to 76.8 MHz; clock
+    // the console with sys-clk instead.
+    if (options.unpaced) setenv("RECOMP_UNPACED", "1", 1);
+    // soft_vblank: a frame a little over 16.7 ms starts the next one at once
+    // instead of waiting a whole refresh (see d3d_vblank.cpp).
+    if (options.soft_vblank) setenv("RECOMP_SOFT_VBLANK", "1", 1);
+    // native_math: native versions of the hottest math helpers (doa3_nx_math.c).
+    doa3_nx_native_enabled = options.native_math ? 1 : 0;
+    // texcheck_always: check cached textures on every draw, not once a frame.
+    if (options.texcheck_always) setenv("RECOMP_GL_TEXCHECK_ALWAYS", "1", 1);
+    // gl_vsync: the render thread also waits for vblank (old double vsync).
+    if (options.gl_vsync) setenv("RECOMP_GL_VSYNC", "1", 1);
+    std::fprintf(stderr, "[nx] options: native_math=%d soft_vblank=%d texcheck_always=%d gl_vsync=%d unpaced=%d\n",
+        options.native_math, options.soft_vblank, options.texcheck_always, options.gl_vsync, options.unpaced);
     consoleUpdate(nullptr);
     mutexInit(&console_mutex);
 
