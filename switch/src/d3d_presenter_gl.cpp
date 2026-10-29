@@ -1038,17 +1038,15 @@ GLuint prepareTexture(RecompD3dPresenter *p, const RecompD3dPresenterDrawCommand
         if (entry.format_byte == desc.format_byte && entry.width == desc.width && entry.height == desc.height &&
             entry.mip_levels == levels &&
             (!palettized || std::memcmp(entry.palette, draw.palette_bytes, kPaletteBytes) == 0)) {
-            // RECOMP_GL_TEXCHECK_ALWAYS=1 (Y held at boot): check on every draw again.
-            static const bool check_always = [] {
-                const char *value = std::getenv("RECOMP_GL_TEXCHECK_ALWAYS");
+            // Cached textures are fingerprinted on every draw: the game rewrites
+            // some mid-frame (the health bars). RECOMP_GL_TEXCHECK_ONCE=1 checks
+            // each once per frame instead, which the render thread has no need
+            // for now that it keeps ahead of the guest.
+            static const bool check_once = [] {
+                const char *value = std::getenv("RECOMP_GL_TEXCHECK_ONCE");
                 return value != nullptr && value[0] == '1';
             }();
-            // Small textures are re-checked on every draw: the game rewrites
-            // some mid-frame (the health bars), and sampling a small one is
-            // cheap. Large ones are checked once per frame.
-            constexpr uint32_t kRecheckEveryDrawBytes = 16u * 1024u;
-            if (fingerprinted && (check_always || draw.texture_byte_count <= kRecheckEveryDrawBytes ||
-                    entry.checked_present != p->present_count)) {
+            if (fingerprinted && (!check_once || entry.checked_present != p->present_count)) {
                 if (entry.fingerprint != currentFingerprint()) {
                     unindexTexture(p, it->second);
                     retireTexture(p, entry);
