@@ -277,8 +277,21 @@ else()
     set(_native_flags "")
     target_compile_definitions(doa3-nx PRIVATE DOA3_NX_NATIVE_OFF)
 endif()
+# Profile-guided optimization of the lifted code, in two builds:
+#   GEN  instruments it; playing writes the profile to sdmc:/switch/doa3-nx/pgo
+#   USE  rebuilds it with the profile copied back to DOA3_NX_PGO_DIR
+set(DOA3_NX_PGO "OFF" CACHE STRING "Profile-guided optimization: OFF, GEN or USE")
+set(DOA3_NX_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../private/pgo" CACHE PATH "Profile for DOA3_NX_PGO=USE")
+set(_pgo_flags "")
+if(DOA3_NX_PGO STREQUAL "GEN")
+    set(_pgo_flags ";-fprofile-generate;-fprofile-update=single;-fprofile-dir=sdmc:/switch/doa3-nx/pgo")
+    target_link_options(doa3-nx PRIVATE "-fprofile-generate")
+    target_compile_definitions(doa3-nx PRIVATE DOA3_NX_PGO_GEN)
+elseif(DOA3_NX_PGO STREQUAL "USE")
+    set(_pgo_flags ";-fprofile-use;-fprofile-partial-training;-Wno-missing-profile;-fprofile-dir=${DOA3_NX_PGO_DIR}")
+endif()
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
-    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w${_func_profile_flags}${_native_flags}")
+    COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w${_func_profile_flags}${_native_flags}${_pgo_flags}")
 # x87 rounding: no fused multiply-add in the native math.
 set_source_files_properties("${NX_SRC}/doa3_nx_math.c" PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
 # Direct (not GOT) access to globals from C, and libm calls such as sqrt

@@ -298,8 +298,20 @@ void doa3_nx_profile_start(void);     // profile.cpp
 
 // exit() is wrapped at link time (-Wl,--wrap=exit): a runtime stop with a
 // nonzero code stays on screen instead of dropping back to the menu.
+#if defined(DOA3_NX_PGO_GEN)
+void __gcov_dump(void);
+#endif
+
 void __wrap_exit(int code)
 {
+#if defined(DOA3_NX_PGO_GEN)
+    // Profile-guided build, step 1: write the profile before anything can
+    // stop the process (HOME close, or waiting on the error screen).
+    mkdir("sdmc:/switch/doa3-nx/pgo", 0777);
+    __gcov_dump();
+    std::fprintf(stderr, "[nx] profile written to sdmc:/switch/doa3-nx/pgo\n");
+    std::fflush(stderr);
+#endif
     if (code != 0 && console_ready) {
         std::printf("\n\x1b[31mEl juego se ha detenido (codigo %d).\x1b[0m\n", code);
         std::printf("Log completo: %s\n", kLog);

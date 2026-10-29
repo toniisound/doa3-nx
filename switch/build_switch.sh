@@ -7,6 +7,8 @@
 #   JOBS=3 ./switch/build_switch.sh     # more jobs if WSL has the RAM (~3 GB each)
 #   OPT=-O3 ./switch/build_switch.sh    # lifted code at -O3 (slower build, more RAM)
 #   PROFILE=1 ./switch/build_switch.sh  # diagnostic: time every lifted function
+#   PGO=gen ./switch/build_switch.sh    # profile-guided build, step 1 (instrumented)
+#   PGO=use ./switch/build_switch.sh    # step 2, with the profile in private/pgo
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,6 +17,16 @@ JOBS="${JOBS:-2}"
 OPT="${OPT:--O2}"
 PROFILE="${PROFILE:-0}"
 if [[ "${PROFILE}" == "1" ]]; then FUNC_PROFILE=ON; else FUNC_PROFILE=OFF; fi
+case "${PGO:-off}" in
+    gen|GEN) PGO_MODE=GEN ;;
+    use|USE)
+        PGO_MODE=USE
+        if ! compgen -G "${ROOT}/private/pgo/*.gcda" >/dev/null; then
+            echo "No profile: copy sdmc:/switch/doa3-nx/pgo/*.gcda to ${ROOT}/private/pgo/" >&2
+            exit 1
+        fi ;;
+    *) PGO_MODE=OFF ;;
+esac
 
 if [[ ! -f "${DEVKITPRO}/cmake/Switch.cmake" ]]; then
     echo "devkitPro not found at ${DEVKITPRO} (install switch-dev: sudo dkp-pacman -S switch-dev)" >&2
@@ -68,6 +80,8 @@ cmake -S "${ROOT}/switch" -B "${ROOT}/build/switch" "${GENERATOR[@]}" \
     -DRECOMP_PROGRAM_EBP_EXPECTED="${EBP}" \
     -DDOA3_NX_GENERATED_OPT="${OPT}" \
     -DDOA3_NX_FUNC_PROFILE="${FUNC_PROFILE}" \
+    -DDOA3_NX_PGO="${PGO_MODE}" \
+    -DDOA3_NX_PGO_DIR="${ROOT}/private/pgo" \
     "${ICON_ARGS[@]}"
 cmake --build "${ROOT}/build/switch" --parallel "${JOBS}" --target doa3-nx_nro
 
