@@ -337,10 +337,17 @@ int main(int argc, char **argv)
     // Held at boot: R runs unpaced (as fast as the CPU allows, to measure
     // headroom above 60 fps). There is no CPU boost: boost mode would drop the
     // GPU to 76.8 MHz. Clock the console with sys-clk instead.
+    // The first samples after boot can still be empty: read the pad for a
+    // quarter second and keep every button seen held.
     PadState pad;
     padInitializeDefault(&pad);
-    padUpdate(&pad);
-    const u64 held = padGetButtons(&pad);
+    u64 held = 0;
+    for (int i = 0; i < 15; ++i) {
+        padUpdate(&pad);
+        held |= padGetButtons(&pad);
+        svcSleepThread(16'000'000);
+    }
+    std::fprintf(stderr, "[nx] buttons held at boot: 0x%llx\n", (unsigned long long)held);
     if (held & HidNpadButton_R) {
         setenv("RECOMP_UNPACED", "1", 1);
         std::fprintf(stderr, "[nx] RECOMP_UNPACED=1 (R held at boot)\n");
