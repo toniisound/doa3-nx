@@ -18,6 +18,16 @@
 
 #define PC(x) RECOMP_FP_PC(x)
 
+// Off (X held at boot, RECOMP_NATIVE_MATH=0): every helper runs the lifted
+// version instead, to compare without rebuilding.
+int doa3_nx_native_enabled = 1;
+void sub_00154750(void);
+void sub_001547E0(void);
+void sub_001548E0(void);
+void sub_00154570(void);
+void sub_00154680(void);
+#define LIFTED_IF_DISABLED(name) do { if (!doa3_nx_native_enabled) { name(); return; } } while (0)
+
 // The current matrix the 0x00154680 / 0x00154570 helpers load.
 #define CURRENT_MATRIX 0x0090FAA0u
 
@@ -85,12 +95,21 @@ static inline __attribute__((always_inline)) void transform_current(int translat
     esp += 4u;
 }
 
-void doa3_nx_native_00154750(void) { transform_current(1); }
-void doa3_nx_native_001547E0(void) { transform_current(0); }
+void doa3_nx_native_00154750(void)
+{
+    LIFTED_IF_DISABLED(sub_00154750);
+    transform_current(1);
+}
+void doa3_nx_native_001547E0(void)
+{
+    LIFTED_IF_DISABLED(sub_001547E0);
+    transform_current(0);
+}
 
 // cdecl (matrix, vector, out): vector times matrix plus translation.
 void doa3_nx_native_001548E0(void)
 {
+    LIFTED_IF_DISABLED(sub_001548E0);
     const uint32_t m = MEM32(esp + 4u), v = MEM32(esp + 8u), out = MEM32(esp + 0xCu);
     double r[3];
 #pragma GCC unroll 3
@@ -118,6 +137,7 @@ void doa3_nx_native_001548E0(void)
 // source is 16-byte aligned and rep movsd otherwise.
 void doa3_nx_native_00154570(void)
 {
+    LIFTED_IF_DISABLED(sub_00154570);
     const uint32_t src = MEM32(esp + 4u);
     MEM32(esp - 4u) = g_ebp; // push ebp
     eax = src;
@@ -154,6 +174,7 @@ void doa3_nx_native_00154570(void)
 // Register (ECX = matrix) wrapper around 0x00154570.
 void doa3_nx_native_00154680(void)
 {
+    LIFTED_IF_DISABLED(sub_00154680);
     const uint32_t matrix = ecx;
     PUSH32(esp, matrix);
     PUSH32(esp, 0x00154686u); // return address
