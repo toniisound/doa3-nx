@@ -317,7 +317,12 @@ void save_node(std::string &out, const fs::path &path, const fs::path &relative)
     times = {uint64_t(info.CreationTime.QuadPart), uint64_t(info.LastAccessTime.QuadPart),
         uint64_t(info.LastWriteTime.QuadPart), uint64_t(info.ChangeTime.QuadPart)};
 #else
+#if defined(__SWITCH__)
+    /* No lstat on Horizon, and the SD card has no symlinks. */
+    const auto status = fs::status(path);
+#else
     const auto status = fs::symlink_status(path);
+#endif
     require(fs::is_directory(status) || fs::is_regular_file(status));
     const bool directory = fs::is_directory(status);
     times.write = static_cast<uint64_t>(fs::last_write_time(path).time_since_epoch().count());
@@ -389,6 +394,9 @@ void set_metadata(const Node &node)
     bool copied = SetFileInformationByHandle(handle, FileBasicInfo, &info, sizeof info) != 0;
     bool closed = CloseHandle(handle) != 0;
     require(copied && closed);
+#elif defined(__SWITCH__)
+    /* Horizon cannot set file times (utimensat is ENOSYS); they are cosmetic. */
+    (void)node;
 #else
     fs::last_write_time(node.path, fs::file_time_type(
         fs::file_time_type::duration(static_cast<int64_t>(node.times.write))));
