@@ -175,6 +175,8 @@ void remove_tree(const fs::path &path)
         }
     };
     if (exists_plain(path)) clear_readonly(clear_readonly, path);
+#elif defined(__SWITCH__)
+    /* The SD card's FAT has no permission bits (chmod is ENOSYS on Horizon). */
 #else
     /* Unlinking needs write access to the parent, so open read-only directories. */
     if (exists_plain(path) && fs::is_directory(path)) {
