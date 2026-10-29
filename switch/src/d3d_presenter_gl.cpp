@@ -1043,7 +1043,12 @@ GLuint prepareTexture(RecompD3dPresenter *p, const RecompD3dPresenterDrawCommand
                 const char *value = std::getenv("RECOMP_GL_TEXCHECK_ALWAYS");
                 return value != nullptr && value[0] == '1';
             }();
-            if (fingerprinted && (check_always || entry.checked_present != p->present_count)) {
+            // Small textures are re-checked on every draw: the game rewrites
+            // some mid-frame (the health bars), and sampling a small one is
+            // cheap. Large ones are checked once per frame.
+            constexpr uint32_t kRecheckEveryDrawBytes = 16u * 1024u;
+            if (fingerprinted && (check_always || draw.texture_byte_count <= kRecheckEveryDrawBytes ||
+                    entry.checked_present != p->present_count)) {
                 if (entry.fingerprint != currentFingerprint()) {
                     unindexTexture(p, it->second);
                     retireTexture(p, entry);
