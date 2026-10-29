@@ -318,7 +318,7 @@ const char kOptions[] = "sdmc:/switch/doa3-nx/doa3-nx.ini";
 struct BootOptions {
     bool native_math = true;
     bool soft_vblank = true;
-    bool texcheck_always = false;
+    bool texcheck_once = false;
     bool gl_vsync = false;
     bool unpaced = false;
 };
@@ -330,9 +330,9 @@ BootOptions readOptions()
     if (file == nullptr) {
         if (FILE *out = std::fopen(kOptions, "w")) {
             std::fputs("; DOA3 NX options (1 = on, 0 = off). Holding a button at boot also\n"
-                "; switches one for that run: X native_math off, Y texcheck_always on,\n"
+                "; switches one for that run: X native_math off, Y texcheck_once on,\n"
                 "; ZL soft_vblank off, L gl_vsync on, R unpaced on.\n"
-                "native_math=1\nsoft_vblank=1\ntexcheck_always=0\ngl_vsync=0\nunpaced=0\n", out);
+                "native_math=1\nsoft_vblank=1\ntexcheck_once=0\ngl_vsync=0\nunpaced=0\n", out);
             std::fclose(out);
         }
         return options;
@@ -346,7 +346,7 @@ BootOptions readOptions()
         const bool on = value != 0;
         if (!std::strcmp(key, "native_math")) options.native_math = on;
         else if (!std::strcmp(key, "soft_vblank")) options.soft_vblank = on;
-        else if (!std::strcmp(key, "texcheck_always")) options.texcheck_always = on;
+        else if (!std::strcmp(key, "texcheck_once")) options.texcheck_once = on;
         else if (!std::strcmp(key, "gl_vsync")) options.gl_vsync = on;
         else if (!std::strcmp(key, "unpaced")) options.unpaced = on;
     }
@@ -398,7 +398,7 @@ int main(int argc, char **argv)
     if (held & HidNpadButton_R) options.unpaced = true;
     if (held & HidNpadButton_ZL) options.soft_vblank = false;
     if (held & HidNpadButton_X) options.native_math = false;
-    if (held & HidNpadButton_Y) options.texcheck_always = true;
+    if (held & HidNpadButton_Y) options.texcheck_once = true;
     if (held & HidNpadButton_L) options.gl_vsync = true;
 
     // unpaced: as fast as the CPU allows, to measure headroom above 60 fps.
@@ -410,12 +410,13 @@ int main(int argc, char **argv)
     if (options.soft_vblank) setenv("RECOMP_SOFT_VBLANK", "1", 1);
     // native_math: native versions of the hottest math helpers (doa3_nx_math.c).
     doa3_nx_native_enabled = options.native_math ? 1 : 0;
-    // texcheck_always: check cached textures on every draw, not once a frame.
-    if (options.texcheck_always) setenv("RECOMP_GL_TEXCHECK_ALWAYS", "1", 1);
+    // texcheck_once: check cached textures once a frame, not on every draw
+    // (faster, but the health bars can show empty).
+    if (options.texcheck_once) setenv("RECOMP_GL_TEXCHECK_ONCE", "1", 1);
     // gl_vsync: the render thread also waits for vblank (old double vsync).
     if (options.gl_vsync) setenv("RECOMP_GL_VSYNC", "1", 1);
-    std::fprintf(stderr, "[nx] options: native_math=%d soft_vblank=%d texcheck_always=%d gl_vsync=%d unpaced=%d\n",
-        options.native_math, options.soft_vblank, options.texcheck_always, options.gl_vsync, options.unpaced);
+    std::fprintf(stderr, "[nx] options: native_math=%d soft_vblank=%d texcheck_once=%d gl_vsync=%d unpaced=%d\n",
+        options.native_math, options.soft_vblank, options.texcheck_once, options.gl_vsync, options.unpaced);
     consoleUpdate(nullptr);
     mutexInit(&console_mutex);
 
