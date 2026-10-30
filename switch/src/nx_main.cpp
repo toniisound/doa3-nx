@@ -391,6 +391,12 @@ int main(int argc, char **argv)
         return 0;
     }
 
+#if defined(DOA3_NX_PGO_GEN)
+    // Without the exit lock, HOME > Close kills the process outright and the
+    // profile is never written; with it, the close arrives as a normal exit.
+    appletLockExit();
+    std::fprintf(stderr, "[nx] PGO profile build: exit with HOME > Close or ZL+ZR+(-)+(+)\n");
+#endif
     // Options: sdmc:/switch/doa3-nx/doa3-nx.ini (written with the defaults on
     // the first run), or the same switches held at boot.
     BootOptions options = readOptions();
