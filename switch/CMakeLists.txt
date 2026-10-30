@@ -279,12 +279,14 @@ else()
 endif()
 # Profile-guided optimization of the lifted code, in two builds:
 #   GEN  instruments it; playing writes the profile to sdmc:/switch/doa3-nx/pgo
+#        (an absolute path: GCC prefixes a relative -fprofile-dir, and "sdmc:"
+#        counts as relative, with the build directory; newlib maps / to sdmc:)
 #   USE  rebuilds it with the profile copied back to DOA3_NX_PGO_DIR
 set(DOA3_NX_PGO "OFF" CACHE STRING "Profile-guided optimization: OFF, GEN or USE")
 set(DOA3_NX_PGO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../private/pgo" CACHE PATH "Profile for DOA3_NX_PGO=USE")
 set(_pgo_flags "")
 if(DOA3_NX_PGO STREQUAL "GEN")
-    set(_pgo_flags ";-fprofile-generate;-fprofile-update=single;-fprofile-dir=sdmc:/switch/doa3-nx/pgo")
+    set(_pgo_flags ";-fprofile-generate;-fprofile-update=single;-fprofile-dir=/switch/doa3-nx/pgo")
     target_link_options(doa3-nx PRIVATE "-fprofile-generate")
     target_compile_definitions(doa3-nx PRIVATE DOA3_NX_PGO_GEN)
 elseif(DOA3_NX_PGO STREQUAL "USE")
