@@ -10,6 +10,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 #ifdef RECOMP_DOAXBV_BINDINGS
@@ -2378,8 +2379,11 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
         light = ((const uint32_t *)l)[0x23];
     }
     for (uint32_t i = 0u; i <= layout->blend_weight_count; ++i) {
-        if (!read_transform(device, D3D_TRANSFORM_WORLD + i, result.world_transforms[i]) ||
-            !recomp_d3d_normal_transform(result.world_transforms[i], result.normal_transforms[i])) return;
+        if (!read_transform(device, D3D_TRANSFORM_WORLD + i, result.world_transforms[i])) return;
+#if !defined(__SWITCH__)
+        /* The Switch renderer derives these on its own thread. */
+        if (!recomp_d3d_normal_transform(result.world_transforms[i], result.normal_transforms[i])) return;
+#endif
     }
     /* LOCALVIEWER is off in DOA3: the viewer direction is eye-space -Z in world space. */
     float view[16];
@@ -2417,7 +2421,22 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
     uint32_t fvf = device ? *recomp_memory_u32(device + D3D_VERTEX_SHADER_HANDLE_OFFSET) : 0u;
     uint32_t triangles = recomp_d3d_draw_triangle_count(primitive, count);
     RecompD3dVertexLayout layout;
+#if defined(__SWITCH__)
+    /* Fixed-function draws never read the 5 KiB vertex-program arrays (the
+       capture skips them too), so only the rest of the 7.5 KiB command is
+       cleared; vertex-program draws clear it all. */
+    RecompD3dPresenterCommand command;
+    if ((fvf & 1u) != 0u) {
+        memset(&command, 0, sizeof command);
+    } else {
+        const size_t head = offsetof(RecompD3dPresenterCommand, data.draw.program);
+        const size_t tail = offsetof(RecompD3dPresenterCommand, data.draw.program_alpha_mask);
+        memset(&command, 0, head);
+        memset((char *)&command + tail, 0, sizeof command - tail);
+    }
+#else
     RecompD3dPresenterCommand command = {0};
+#endif
     RecompD3dPresenterDrawCommand *draw = &command.data.draw;
     uint16_t *sequential = NULL;
     const char *decline = NULL;

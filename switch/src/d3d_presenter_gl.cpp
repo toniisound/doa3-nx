@@ -1931,10 +1931,27 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             constants[138] = draw.program_alpha_mask ? 1.0f : 0.0f;
             constants[139] = draw.program_mask_lod_bias;
         }
-        if (draw.directional.enabled && !draw.program_count) {
+        // The draw adapter leaves the normal matrices to this thread (Switch):
+        // inverse-transpose each world matrix in use; a singular one turns
+        // the draw's lighting off, as the adapter itself did.
+        bool lit = draw.directional.enabled && !draw.program_count;
+        float normals[4][16]{};
+        if (lit) {
+            for (uint32_t i = 0u; i < 4u; ++i) {
+                // Unused slots stay zero (the adapters zero the block).
+                const float *world = draw.directional.world_transforms[i];
+                bool used = false;
+                for (uint32_t k = 0u; k < 16u; ++k) used |= world[k] != 0.0f;
+                if (used && !recomp_d3d_normal_transform(world, normals[i])) {
+                    lit = false;
+                    break;
+                }
+            }
+        }
+        if (lit) {
             const auto &light = draw.directional;
             float *dir = constants + kLightingUniformFloats;
-            std::memcpy(dir, light.normal_transforms, sizeof light.normal_transforms);
+            std::memcpy(dir, normals, sizeof normals);
             std::memcpy(dir + 64, light.ambient_emissive, sizeof light.ambient_emissive);
             std::memcpy(dir + 68, light.material_diffuse, sizeof light.material_diffuse);
             std::memcpy(dir + 72, light.directions, sizeof light.directions);
@@ -1988,7 +2005,7 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
         }
 
         // The whole block is bound: unlit draws leave the lighting tail zero.
-        const uint32_t uniform_floats = (draw.directional.enabled && !draw.program_count)
+        const uint32_t uniform_floats = lit
             ? kTransformUniformFloats : kHeaderUniformFloats;
         const uint32_t uniform_bytes = kTransformUniformFloats * sizeof(float);
         const uint32_t align = static_cast<uint32_t>(p->uniform_align);
