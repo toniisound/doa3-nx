@@ -159,6 +159,7 @@ void run(PresenterThread &thread, RecompD3dPresenterConfig config)
     thread.changed.notify_all();
     if (created != RECOMP_D3D_PRESENTER_OK) return;
 
+    D3dCapturePacket::Size peak{};
     for (;;) {
         D3dCapturePacket *packet = nullptr;
         bool apply_immediate = false, immediate = false;
@@ -173,7 +174,18 @@ void run(PresenterThread &thread, RecompD3dPresenterConfig config)
         }
         if (apply_immediate) gl_backend_set_immediate_present(backend, immediate);
         execute(thread, backend, *packet);
+        // Grow every packet to the largest frame seen here, before the game
+        // thread reuses it, so its adds never reallocate mid-frame.
+        const auto used = packet->size();
+        peak.entries = std::max(peak.entries, used.entries);
+        peak.commands = std::max(peak.commands, used.commands);
+        peak.payload_words = std::max(peak.payload_words, used.payload_words);
+        peak.span_slots = std::max(peak.span_slots, used.span_slots);
         packet->clear();
+        try {
+            packet->reserve(peak);
+        } catch (const std::bad_alloc &) {
+        }
         {
             std::lock_guard<std::mutex> lock(thread.mutex);
             thread.front = (thread.front + 1) % 3;

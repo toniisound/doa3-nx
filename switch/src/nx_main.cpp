@@ -333,6 +333,7 @@ struct BootOptions {
     bool texcheck_once = false;
     bool gl_vsync = false;
     bool unpaced = false;
+    bool widescreen = true;
 };
 
 BootOptions readOptions()
@@ -344,7 +345,7 @@ BootOptions readOptions()
             std::fputs("; DOA3 NX options (1 = on, 0 = off). Holding a button at boot also\n"
                 "; switches one for that run: X native_math off, Y texcheck_once on,\n"
                 "; ZL soft_vblank off, L gl_vsync on, R unpaced on.\n"
-                "native_math=1\nsoft_vblank=1\ntexcheck_once=0\ngl_vsync=0\nunpaced=0\n", out);
+                "widescreen=1\nnative_math=1\nsoft_vblank=1\ntexcheck_once=0\ngl_vsync=0\nunpaced=0\n", out);
             std::fclose(out);
         }
         return options;
@@ -361,6 +362,7 @@ BootOptions readOptions()
         else if (!std::strcmp(key, "texcheck_once")) options.texcheck_once = on;
         else if (!std::strcmp(key, "gl_vsync")) options.gl_vsync = on;
         else if (!std::strcmp(key, "unpaced")) options.unpaced = on;
+        else if (!std::strcmp(key, "widescreen")) options.widescreen = on;
     }
     std::fclose(file);
     return options;
@@ -429,6 +431,9 @@ int main(int argc, char **argv)
     // soft_vblank: a frame a little over 16.7 ms starts the next one at once
     // instead of waiting a whole refresh (see d3d_vblank.cpp).
     if (options.soft_vblank) setenv("RECOMP_SOFT_VBLANK", "1", 1);
+    // widescreen: the Xbox's widescreen video flag; the game draws 16:9 and
+    // the renderer fills the screen (0: 4:3 with side bars).
+    if (options.widescreen) setenv("RECOMP_D3D_WIDESCREEN", "1", 1);
     // native_math: native versions of the hottest math helpers (doa3_nx_math.c).
     doa3_nx_native_enabled = options.native_math ? 1 : 0;
     // texcheck_once: check cached textures once a frame, not on every draw
@@ -436,8 +441,8 @@ int main(int argc, char **argv)
     if (options.texcheck_once) setenv("RECOMP_GL_TEXCHECK_ONCE", "1", 1);
     // gl_vsync: the render thread also waits for vblank (old double vsync).
     if (options.gl_vsync) setenv("RECOMP_GL_VSYNC", "1", 1);
-    std::fprintf(stderr, "[nx] options: native_math=%d soft_vblank=%d texcheck_once=%d gl_vsync=%d unpaced=%d\n",
-        options.native_math, options.soft_vblank, options.texcheck_once, options.gl_vsync, options.unpaced);
+    std::fprintf(stderr, "[nx] options: widescreen=%d native_math=%d soft_vblank=%d texcheck_once=%d gl_vsync=%d unpaced=%d\n",
+        options.widescreen, options.native_math, options.soft_vblank, options.texcheck_once, options.gl_vsync, options.unpaced);
     consoleUpdate(nullptr);
     mutexInit(&console_mutex);
 
