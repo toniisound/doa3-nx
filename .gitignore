@@ -17,6 +17,9 @@ recomp_dispatch.c
 recomp_funcs.h
 tools/artifacts/
 tools/disasm/output/
+# Built by tools/package_test.py --launchers .
+/Launcher.exe
+/DOA3.exe
 
 # Game and console artifacts
 *.xbe

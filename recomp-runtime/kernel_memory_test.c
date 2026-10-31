@@ -225,6 +225,19 @@ int recomp_kernel_allocation_test(void)
     request[3] = 0x1000u;
     request[2] = contiguous + 0x7ffu;
     passed &= expect_u32("rounded extent upper bound", memory_call(166u, request, 5u), 0u);
+
+    /* A free block that starts off the requested alignment still serves it
+       (D3D Reset reallocating frame buffers), and its head stays free. */
+    recomp_test_heap_reset(HEAP + 0x15000u, -1);
+    uint32_t block_request[] = {0x7000u, 0u, UINT32_MAX, 0x1000u, 4u};
+    uint32_t unaligned = memory_call(166u, block_request, 5u);
+    passed &= expect_u32("unaligned block base", unaligned, HEAP + 0x15000u);
+    memory_call(171u, &unaligned, 1u);
+    recomp_test_heap_reset(HEAP + 0x1c000u, 0);
+    uint32_t aligned_request[] = {0x4000u, 0u, UINT32_MAX, 0x4000u, 4u};
+    passed &= expect_u32("aligned inside free block", memory_call(166u, aligned_request, 5u), HEAP + 0x18000u);
+    uint32_t head_request[] = {0x3000u, 0u, UINT32_MAX, 0x1000u, 4u};
+    passed &= expect_u32("unaligned head kept free", memory_call(166u, head_request, 5u), HEAP + 0x15000u);
     return passed;
 }
 

@@ -177,9 +177,24 @@ static void trace_sample(
     ++lines;
 }
 
+/* Host face buttons are digital, but Xbox ones report pressure, and games in
+   analog-button mode read a full press as a hard hit. Report a light press
+   instead: 0x20 is DOA3's pressed threshold, well below its 0x80 hard-press
+   threshold. RECOMP_INPUT_BUTTON_PRESSURE (1-255) overrides it. */
+static uint8_t pressed_pressure(void)
+{
+    static int pressure = -1;
+    if (pressure < 0) {
+        const char *text = getenv("RECOMP_INPUT_BUTTON_PRESSURE");
+        long value = text != NULL ? strtol(text, NULL, 0) : 0;
+        pressure = value >= 1 && value <= 255 ? (int)value : 0x20;
+    }
+    return (uint8_t)pressure;
+}
+
 static uint8_t button_pressure(SDL_Gamepad *gamepad, SDL_GamepadButton button)
 {
-    return SDL_GetGamepadButton(gamepad, button) ? 0xffu : 0u;
+    return SDL_GetGamepadButton(gamepad, button) ? pressed_pressure() : 0u;
 }
 
 /* SDL Y axes point down; XInput Y axes point up. */
@@ -227,7 +242,31 @@ static void read_pad(SDL_Gamepad *host, RecompInputGamepad *gamepad)
     gamepad->thumb_ry = up_axis(host, SDL_GAMEPAD_AXIS_RIGHTY);
 }
 
+static RecompInputComboHook combo_hook;
+
+void recomp_input_host_set_combo_hook(RecompInputComboHook hook)
+{
+    combo_hook = hook;
+}
+
+static RecompInputCaptureHook capture_hook;
+
+void recomp_input_host_set_capture_hook(RecompInputCaptureHook hook)
+{
+    capture_hook = hook;
+}
+
+static bool sample(uint32_t port, RecompInputGamepad *gamepad, uint16_t *stick_clicks);
+
 bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
+{
+    uint16_t stick_clicks = 0u;
+    const bool present = sample(port, gamepad, &stick_clicks);
+    if (present && capture_hook != NULL) capture_hook(port, gamepad, stick_clicks);
+    return present;
+}
+
+static bool sample(uint32_t port, RecompInputGamepad *gamepad, uint16_t *stick_clicks)
 {
     if (gamepad == NULL || port >= RECOMP_INPUT_PORT_COUNT) {
         return false;
@@ -237,6 +276,24 @@ bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
     SDL_Gamepad *host = pads[port];
     if (host != NULL) {
         read_pad(host, gamepad);
+        *stick_clicks = gamepad->buttons & (XBOX_LEFT_THUMB | XBOX_RIGHT_THUMB);
+        /* The stick clicks are the combo's own: the game never sees them. */
+        const bool combo = combo_hook != NULL && combo_hook(port, gamepad);
+        if (combo_hook != NULL) gamepad->buttons &= (uint16_t)~(XBOX_LEFT_THUMB | XBOX_RIGHT_THUMB);
+        if (combo) {
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_BLACK] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_WHITE] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_LTRIG] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_RTRIG] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_X] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_Y] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_A] = 0u;
+            gamepad->analog_buttons[RECOMP_INPUT_ANALOG_B] = 0u;
+            /* Nor the d-pad, Start and the sticks while the combo is held. */
+            gamepad->buttons &= (uint16_t)~(XBOX_DPAD_UP | XBOX_DPAD_DOWN | XBOX_DPAD_LEFT | XBOX_DPAD_RIGHT |
+                XBOX_START);
+            gamepad->thumb_lx = gamepad->thumb_ly = gamepad->thumb_rx = gamepad->thumb_ry = 0;
+        }
     }
     if (port != 0u) {
         /* The keyboard drives port 0 only. */
@@ -254,14 +311,91 @@ bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
     if (pressed(KEY(VK_RETURN, SDL_SCANCODE_RETURN))) gamepad->buttons |= XBOX_START;
     if (pressed(KEY(VK_BACK, SDL_SCANCODE_BACKSPACE))) gamepad->buttons |= XBOX_BACK;
 
-    if (pressed(KEY('A', SDL_SCANCODE_A))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_X] = 0xffu;
-    if (pressed(KEY('S', SDL_SCANCODE_S))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_Y] = 0xffu;
-    if (pressed(KEY('Z', SDL_SCANCODE_Z))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_A] = 0xffu;
-    if (pressed(KEY('X', SDL_SCANCODE_X))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_B] = 0xffu;
-    if (pressed(KEY('Q', SDL_SCANCODE_Q))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_WHITE] = 0xffu;
-    if (pressed(KEY('W', SDL_SCANCODE_W))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_BLACK] = 0xffu;
+    if (pressed(KEY('A', SDL_SCANCODE_A))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_X] = pressed_pressure();
+    if (pressed(KEY('S', SDL_SCANCODE_S))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_Y] = pressed_pressure();
+    if (pressed(KEY('Z', SDL_SCANCODE_Z))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_A] = pressed_pressure();
+    if (pressed(KEY('X', SDL_SCANCODE_X))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_B] = pressed_pressure();
+    if (pressed(KEY('Q', SDL_SCANCODE_Q))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_WHITE] = pressed_pressure();
+    if (pressed(KEY('W', SDL_SCANCODE_W))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_BLACK] = pressed_pressure();
     if (pressed(KEY('E', SDL_SCANCODE_E))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_LTRIG] = 0xffu;
     if (pressed(KEY('R', SDL_SCANCODE_R))) gamepad->analog_buttons[RECOMP_INPUT_ANALOG_RTRIG] = 0xffu;
     trace_sample(gamepad, host, true);
     return true;
+}
+
+bool recomp_input_host_key(RecompInputHostKey key)
+{
+    if (!focused()) return false;
+    switch (key) {
+    case RECOMP_INPUT_HOST_KEY_F1: return pressed(KEY(VK_F1, SDL_SCANCODE_F1));
+    case RECOMP_INPUT_HOST_KEY_GRAVE: return pressed(KEY(VK_OEM_3, SDL_SCANCODE_GRAVE));
+    case RECOMP_INPUT_HOST_KEY_F12: return pressed(KEY(VK_F12, SDL_SCANCODE_F12));
+    case RECOMP_INPUT_HOST_KEY_W: return pressed(KEY('W', SDL_SCANCODE_W));
+    case RECOMP_INPUT_HOST_KEY_A: return pressed(KEY('A', SDL_SCANCODE_A));
+    case RECOMP_INPUT_HOST_KEY_S: return pressed(KEY('S', SDL_SCANCODE_S));
+    case RECOMP_INPUT_HOST_KEY_D: return pressed(KEY('D', SDL_SCANCODE_D));
+    case RECOMP_INPUT_HOST_KEY_Q: return pressed(KEY('Q', SDL_SCANCODE_Q));
+    case RECOMP_INPUT_HOST_KEY_E: return pressed(KEY('E', SDL_SCANCODE_E));
+    case RECOMP_INPUT_HOST_KEY_R: return pressed(KEY('R', SDL_SCANCODE_R));
+    case RECOMP_INPUT_HOST_KEY_Z: return pressed(KEY('Z', SDL_SCANCODE_Z));
+    case RECOMP_INPUT_HOST_KEY_X: return pressed(KEY('X', SDL_SCANCODE_X));
+    case RECOMP_INPUT_HOST_KEY_C: return pressed(KEY('C', SDL_SCANCODE_C));
+    case RECOMP_INPUT_HOST_KEY_P: return pressed(KEY('P', SDL_SCANCODE_P));
+    case RECOMP_INPUT_HOST_KEY_H: return pressed(KEY('H', SDL_SCANCODE_H));
+    case RECOMP_INPUT_HOST_KEY_PERIOD: return pressed(KEY(VK_OEM_PERIOD, SDL_SCANCODE_PERIOD));
+    case RECOMP_INPUT_HOST_KEY_BACKSLASH: return pressed(KEY(VK_OEM_5, SDL_SCANCODE_BACKSLASH));
+    case RECOMP_INPUT_HOST_KEY_MINUS: return pressed(KEY(VK_OEM_MINUS, SDL_SCANCODE_MINUS));
+    case RECOMP_INPUT_HOST_KEY_EQUALS: return pressed(KEY(VK_OEM_PLUS, SDL_SCANCODE_EQUALS));
+    case RECOMP_INPUT_HOST_KEY_UP: return pressed(KEY(VK_UP, SDL_SCANCODE_UP));
+    case RECOMP_INPUT_HOST_KEY_DOWN: return pressed(KEY(VK_DOWN, SDL_SCANCODE_DOWN));
+    case RECOMP_INPUT_HOST_KEY_LEFT: return pressed(KEY(VK_LEFT, SDL_SCANCODE_LEFT));
+    case RECOMP_INPUT_HOST_KEY_RIGHT: return pressed(KEY(VK_RIGHT, SDL_SCANCODE_RIGHT));
+    case RECOMP_INPUT_HOST_KEY_RETURN: return pressed(KEY(VK_RETURN, SDL_SCANCODE_RETURN));
+    case RECOMP_INPUT_HOST_KEY_BACKSPACE: return pressed(KEY(VK_BACK, SDL_SCANCODE_BACKSPACE));
+    case RECOMP_INPUT_HOST_KEY_SHIFT:
+        return pressed(KEY(VK_LSHIFT, SDL_SCANCODE_LSHIFT)) || pressed(KEY(VK_RSHIFT, SDL_SCANCODE_RSHIFT));
+    case RECOMP_INPUT_HOST_KEY_CONTROL:
+        return pressed(KEY(VK_LCONTROL, SDL_SCANCODE_LCTRL)) || pressed(KEY(VK_RCONTROL, SDL_SCANCODE_RCTRL));
+    case RECOMP_INPUT_HOST_KEY_COUNT: break;
+    }
+    return false;
+}
+
+bool recomp_input_host_mouse_drag(float *dx, float *dy)
+{
+    static bool dragging;
+    static float last_x, last_y;
+    float x = 0.0f, y = 0.0f;
+    bool held = false;
+
+    *dx = *dy = 0.0f;
+    if (focused()) {
+#ifdef _WIN32
+        /* GetAsyncKeyState reads physical buttons; swapped buttons put the
+           logical right one on the left. */
+        const int right = GetSystemMetrics(SM_SWAPBUTTON) ? VK_LBUTTON : VK_RBUTTON;
+        POINT point = {0, 0};
+        held = pressed(right) && GetCursorPos(&point);
+        if (held && !dragging) {
+            /* A drag starts only over the game's client area. */
+            HWND window = GetForegroundWindow();
+            POINT client = point;
+            RECT area;
+            held = ScreenToClient(window, &client) && GetClientRect(window, &area) &&
+                PtInRect(&area, client);
+        }
+        x = (float)point.x;
+        y = (float)point.y;
+#else
+        held = (SDL_GetMouseState(&x, &y) & SDL_BUTTON_RMASK) != 0u;
+#endif
+    }
+    if (held && dragging) {
+        *dx = x - last_x;
+        *dy = y - last_y;
+    }
+    dragging = held;
+    last_x = x;
+    last_y = y;
+    return held;
 }

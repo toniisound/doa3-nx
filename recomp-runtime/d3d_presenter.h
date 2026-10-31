@@ -114,6 +114,9 @@ typedef struct RecompD3dPresenterDrawCommand {
     uint32_t index_count;
     uint32_t triangle_count;
     uint32_t vertex_count;
+    /* Index of the vertex at vertex_bytes; indices count from first_vertex
+       vertices before it, so backends draw with base vertex -first_vertex. */
+    uint32_t first_vertex;
     uint32_t vertex_stride;
     uint32_t fvf;
     /* Bounded API-level vertex program; zero count selects fixed function. */
@@ -177,6 +180,9 @@ typedef struct RecompD3dPresenterDrawCommand {
     bool has_reflection;
     bool reflection_normalize;
     bool reflection_mesh_uv;
+    /* Stage 0 samples at reflection_transform * the camera-space reflection
+       vector instead of UV0; uses the same world-view and normal matrices. */
+    bool reflection_texgen;
     RecompD3dTextureDesc reflection_texture;
     const void *reflection_bytes;
     uint32_t reflection_byte_count;

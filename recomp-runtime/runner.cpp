@@ -4,6 +4,7 @@
 #include "cri_service_adapter.h"
 extern "C" {
 #include "program_manual.h"
+#include "doa3_build.h"
 }
 #include "xapi_time_adapter.h"
 #include "audio_output.h"
@@ -12,6 +13,7 @@ extern "C" {
 #include "d3d_presenter.h"
 #include "d3d_frame_adapter.h"
 #include "fiber_adapter.h"
+#include "free_camera_adapter.h"
 #include "input_adapter.h"
 #include "input_host_win32.h"
 #include "input_log.h"
@@ -303,6 +305,7 @@ void hashRam(std::uint32_t swap)
 void onPresent(std::uint32_t swap)
 {
     recomp_save_unlock_all();
+    recomp_save_analog_button_on();
     if (ramHashFile != nullptr) hashRam(swap);
     // Desync triage: RECOMP_RAM_DUMP_AT=<frame> writes guest RAM to RECOMP_RAM_DUMP.
     if (ramDumpFrame != 0u && inputFrame == ramDumpFrame) {
@@ -934,6 +937,13 @@ std::vector<AnalogPulse> inputAnalogPulses;
         std::cerr << "recomp runner: " << parsed.errors.front() << '\n';
         return 1;
     }
+    {
+        // Which disc is running (region 1 North America, 2 Japan, 4 rest of world).
+        const doaxbv::XbeCertificate &cert = parsed.metadata.certificate;
+        std::fprintf(stderr, "recomp runner: %s, title %08X, region %X, version %u, sha256 %.12s\n",
+                     cert.title.c_str(), cert.titleId, cert.gameRegion, cert.version,
+                     parsed.metadata.fileSha256.c_str());
+    }
 
     {
         std::filesystem::path xbe_path = std::filesystem::absolute(xbePath);
@@ -1015,6 +1025,10 @@ std::vector<AnalogPulse> inputAnalogPulses;
 #ifdef RECOMP_DOAXBV_BINDINGS
     /* DOAXBV's options defaults table turns Vibration off; default it on. */
     *recomp_memory(0x003a4c35u, 1u) = 1u;
+#else
+    /* DOA3 reads the stick only with Analog Button on, but its options
+       defaults table turns it off; default it on. Saves keep their choice. */
+    *recomp_memory(DOA3(0x0021b4fbu, 0x003f4563u), 1u) = 1u;
 #endif
     /* The guest Swap seam paces updates independently of the host
        monitor. --vsync additionally synchronizes presentation to scanout. */
@@ -1076,6 +1090,9 @@ std::vector<AnalogPulse> inputAnalogPulses;
     ramHashBase = memory.data();
     ramHashSize = memory.size();
     recomp_d3d_present_hook = onPresent;
+    /* The free camera and the scene freeze run only with RECOMP_FREE_CAMERA=1;
+       off, input samples and task switches go unhooked. */
+    recomp_free_camera_install();
 #endif
 #ifndef RECOMP_FULL_PROGRAM
     recomp_imports_reset();

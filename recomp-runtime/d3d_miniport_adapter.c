@@ -21,6 +21,20 @@ enum {
     CHANNEL_DMA_PUT = 0x40u,
     CHANNEL_DMA_GET = 0x44u,
 
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    /* D3D8 4134 (Japan 3.1) CDevice, from CDevice::KickOff and D3D_SetFence;
+       see docs/doa3-jp-test.md. */
+    DEVICE_PUT = 0x0000u,
+    DEVICE_FLAGS = 0x0008u,
+    DEVICE_KICKED_PUT = 0x002cu,
+    DEVICE_FENCE = 0x0030u,
+    DEVICE_FENCE_RECORDS = 0x0050u,
+    DEVICE_CONTEXT = 0x0034u,
+    DEVICE_ALTERNATE_PUT = 0x035cu,
+    DEVICE_FLIPS_DONE = 0x2458u,
+    DEVICE_CHANNEL = 0x2264u,
+    DEVICE_FRAME_COUNTER = 0x2abcu,
+#else
     DEVICE_PUT = 0x0000u,
     DEVICE_FLAGS = 0x000cu,
     DEVICE_KICKED_PUT = 0x0018u,
@@ -31,6 +45,7 @@ enum {
     DEVICE_FLIPS_DONE = 0x2518u,
     DEVICE_CHANNEL = 0x2304u,
     DEVICE_FRAME_COUNTER = 0x2b60u,
+#endif
     DEVICE_FLAG_ALTERNATE = 0x4u,
 };
 

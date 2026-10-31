@@ -34,6 +34,8 @@ jobs:
         run: cmake --build build/recomp-runtime --config Debug
       - name: Run public runtime tests
         run: ctest --test-dir build/recomp-runtime -C Debug --output-on-failure
+      - name: Build the Windows launchers
+        run: python tools/package_test.py --launchers build/launchers
       - name: Prove partial authentication fails closed
         shell: pwsh
         run: |

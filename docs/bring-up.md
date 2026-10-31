@@ -180,11 +180,11 @@ directory off the include path, so generated code includes the runtime's header.
 - `recomp_debug_service` (`int 0x2d` DbgPrint) prints to stderr.
 - Every costume and character is offered. The save block holds one byte per character at
   `0x00487806`: the costume tiers earned (new saves start at 2, the maximum
-  is 3). The select screen reads `min(byte, the character's tier count)`.
-  `recomp_save_unlock_all()` (`save_adapter.c`) sets all 19 bytes to 3 and the
-  extra-characters flag at `0x00488837` to 1 on every Present, so new and
-  loaded saves both show every tier, and the next auto-save stores them.
-  Verified in a RAM dump: 19 bytes of 03 at that address.
+  is 3 on USA and 5 on Japan 3.1). The select screen reads `min(byte, the
+  slot's tier count)`. `recomp_save_unlock_all()` (`save_adapter.c`) raises
+  each byte to its slots' largest count from the game's own table, and sets
+  the extra-characters flag at `0x00488837` to 1, on every Present, so new
+  and loaded saves both show every tier, and the next auto-save stores them.
 - `KeQueryPerformanceCounter` (126) and `KeQueryPerformanceFrequency` (127) are
   served from the existing XAPI time model. DOA3 imports them; DOAXBV did not.
   `KeQueryInterruptTime` (125) is derived from the same counter, and

@@ -276,8 +276,8 @@ void D3dCapturePacket::reserve(const Size &size)
     entries_.reserve(size.entries);
     commands_.reserve(size.commands);
     payload_.reserve(size.payload_words);
-    if (span_count_ == 0u && span_slots_.size() < size.span_slots) {
-        span_slots_.assign(size.span_slots, SpanSlot{nullptr, 0u, 0u});
+    if (span_count_ == 0u && span_slots_.size() < size.spans) {
+        span_slots_.assign(size.spans, SpanSlot{nullptr, 0u, 0u});
         span_count_ = 0u;
     }
 }

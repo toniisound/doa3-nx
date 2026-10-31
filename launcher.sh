@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# macOS and Linux counterpart of Launcher.cmd: pick resolution, anti-aliasing,
+# macOS and Linux counterpart of Launcher.exe: pick resolution, anti-aliasing,
 # volume and widescreen (saved to private/launcher.json), then start
 # run_game.sh, which applies those saved settings.
 set -euo pipefail

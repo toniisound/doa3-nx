@@ -11,9 +11,11 @@ extern "C" {
 /* Xbox primitive types. These are the NV2A SET_BEGIN_END values, not the PC
    D3DPRIMITIVETYPE ones: D3DDevice_DrawIndexedVertices at 0x001E78B0 writes
    the caller's primitive straight into method 0x17FC without translating it,
-   so the guest is already speaking the hardware encoding. The PC enum is one
-   lower across the board, which silently turns strips into fans. */
+   so the guest is already speaking the hardware encoding. Points (1) and
+   line lists (2) match the PC enum; from line strips on the PC values are
+   one lower, which silently turns strips into fans. */
 enum {
+    RECOMP_D3D_PT_POINTLIST = 1u,
     RECOMP_D3D_PT_TRIANGLELIST = 5u,
     RECOMP_D3D_PT_TRIANGLESTRIP = 6u,
     RECOMP_D3D_PT_TRIANGLEFAN = 7u,
@@ -112,6 +114,52 @@ typedef struct RecompD3dVertexLayout {
 /* Decodes an FVF into component offsets. Returns false, leaving the layout
    untouched, when the FVF uses a component this seam does not decode. */
 bool recomp_d3d_fvf_layout(uint32_t fvf, RecompD3dVertexLayout *layout);
+
+/* D3D8 point render states: POINTSIZE, POINTSIZE_MIN and POINTSIZE_MAX in
+   pixels unless scaling is on, then POINTSCALE_A, B and C. */
+typedef struct RecompD3dPointState {
+    float size, size_min, size_max;
+    float scale[3];
+    bool scale_enable;
+    bool sprite;
+} RecompD3dPointState;
+
+/* Expands a point list into camera-facing quads: four vertices and six
+   triangle-list indices per point, positions in view space, so the host
+   draws them with the projection alone. With scaling on, a point at eye
+   distance d is viewport_height * size / sqrt(A + B*d + C*d*d) pixels, as
+   D3D8 defines it; the size is then clamped to [min, max] and to the NV2A's
+   64 pixels. Sprites get texcoords (0,0) at the top left to (1,1); other
+   points keep their first texcoord. Diffuse is copied. indices count from
+   first_vertex. Returns the output FVF, or 0 for a pretransformed, skinned
+   or too long (over 16384 points) list. */
+uint32_t recomp_d3d_point_quads(
+    const RecompD3dPointState *state,
+    const uint8_t *vertices,
+    uint32_t stride,
+    const RecompD3dVertexLayout *layout,
+    const uint16_t *indices,
+    uint32_t count,
+    uint32_t first_vertex,
+    const float world_view[16],
+    const float projection[16],
+    float viewport_width,
+    float viewport_height,
+    uint8_t *out_vertices,
+    uint16_t *out_indices);
+
+/* Texcoord bounds {u_min, v_min, u_max, v_max} a native-resolution rasterizer
+   samples for one screen-space quad: half a guest pixel inside each edge. An
+   upscaled target samples out to the edges, which pulls neighbouring atlas
+   cells into text and HUD quads. The bounds stay open (+-FLT_MAX) unless the
+   four XYZRHW vertices form an axis-aligned rectangle with one RHW whose
+   texcoords run along it. */
+void recomp_d3d_quad_texcoord_clamp(
+    const void *vertices,
+    uint32_t stride,
+    uint32_t vertex_count,
+    uint32_t texcoord_offset,
+    float bounds[4]);
 
 #ifdef __cplusplus
 }

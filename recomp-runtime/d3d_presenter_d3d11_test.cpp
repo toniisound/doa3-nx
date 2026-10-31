@@ -483,6 +483,16 @@ static bool testReflection(RecompD3dPresenter *presenter,
     const uint32_t mesh_uv[] = {0x30200020,0x30200020,0x30200020,0x30200020};
     if (submitDraw(presenter, draw) != RECOMP_D3D_PRESENTER_OK ||
         !checkPixels(presenter, color, readback, "environment material uses mesh UV0", mesh_uv)) return false;
+    auto texgen = draw;
+    texgen.has_reflection = texgen.reflection_mesh_uv = texgen.directional.enabled = false;
+    texgen.reflection_texgen = true;
+    texgen.texture = draw.reflection_texture;
+    texgen.texture_bytes = environment;
+    texgen.texture_byte_count = sizeof environment;
+    // UV0 0.25 would sample red; the reflected (0,0,1) lands on green.
+    const uint32_t generated[] = {0x8000ff00,0x8000ff00,0x8000ff00,0x8000ff00};
+    if (submitDraw(presenter, texgen) != RECOMP_D3D_PRESENTER_OK ||
+        !checkPixels(presenter, color, readback, "stage 0 samples generated reflection coordinates", generated)) return false;
     struct DiffuseVertex { float position[3]; uint32_t diffuse; float uv[2], uv1[2]; };
     DiffuseVertex diffuse_vertices[4]{};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -648,6 +658,34 @@ static bool testLineLists(RecompD3dPresenter *presenter,
         !checkPixels(presenter, color, readback, "XYZRHW line lists", green)) return false;
     draw.index_count = 3u;
     return submitDraw(presenter, draw) == RECOMP_D3D_PRESENTER_UNSUPPORTED_COMMAND;
+}
+
+// The adapter copies only the indexed slice of a shared vertex buffer.
+static bool testFirstVertex(RecompD3dPresenter *presenter,
+    ID3D11Texture2D *color, ID3D11Texture2D *readback)
+{
+    struct Vertex { float x, y, z, rhw; uint32_t diffuse; };
+    Vertex vertices[4]{};
+    const uint16_t indices[] = {5u, 6u, 7u, 8u};
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        vertices[i] = {i & 1u ? 3.5f : -0.5f, i & 2u ? 3.5f : -0.5f, 0.25f, 1.0f, 0xff00ff00u};
+    }
+    RecompD3dPresenterDrawCommand draw{};
+    draw.primitive_type = RECOMP_D3D_PT_TRIANGLESTRIP;
+    draw.index_count = draw.vertex_count = 4u;
+    draw.first_vertex = 5u;
+    draw.triangle_count = 2u;
+    draw.vertex_stride = sizeof(Vertex);
+    draw.fvf = 0x44u;
+    draw.vertex_bytes = vertices;
+    draw.index_bytes = indices;
+    draw.blend.color_write_mask = 15u;
+    const RecompD3dPresenterClearCommand clear = {
+        true, true, false, 0xff0000ffu, 1.0f, 0u};
+    const uint32_t green[] = {0xff00ff00u, 0xff00ff00u, 0xff00ff00u, 0xff00ff00u};
+    return submitClear(presenter, clear) == RECOMP_D3D_PRESENTER_OK &&
+        submitDraw(presenter, draw) == RECOMP_D3D_PRESENTER_OK &&
+        checkPixels(presenter, color, readback, "indices count from first_vertex", green);
 }
 
 static bool testPretransformedGlyphs(
@@ -2507,6 +2545,7 @@ int main()
     if (status == 0 && !testReflection(&presenter, color, readback)) status = 93;
     if (status == 0 && !testFourTapFilter(&presenter, color, readback)) status = 87;
     if (status == 0 && !testLineLists(&presenter, color, readback)) status = 99;
+    if (status == 0 && !testFirstVertex(&presenter, color, readback)) status = 100;
     if (status == 0 && !testPretransformedGlyphs(&presenter, color, readback)) {
         status = 85;
     }

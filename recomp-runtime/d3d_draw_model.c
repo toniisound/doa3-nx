@@ -1,5 +1,6 @@
 #include "d3d_draw_model.h"
 
+#include <float.h>
 #include <string.h>
 #include <math.h>
 
@@ -148,6 +149,71 @@ bool recomp_d3d_fvf_layout(uint32_t fvf, RecompD3dVertexLayout *layout)
     return true;
 }
 
+uint32_t recomp_d3d_point_quads(
+    const RecompD3dPointState *state,
+    const uint8_t *vertices,
+    uint32_t stride,
+    const RecompD3dVertexLayout *layout,
+    const uint16_t *indices,
+    uint32_t count,
+    uint32_t first_vertex,
+    const float world_view[16],
+    const float projection[16],
+    float viewport_width,
+    float viewport_height,
+    uint8_t *out_vertices,
+    uint16_t *out_indices)
+{
+    static const float corner[4][2] = {{-1.0f, 1.0f}, {1.0f, 1.0f}, {-1.0f, -1.0f}, {1.0f, -1.0f}};
+    static const uint16_t quad[6] = {0u, 1u, 2u, 2u, 1u, 3u};
+    if (layout->pretransformed || layout->blend_weight_count || count > 16384u) return 0u;
+    const bool diffuse = layout->diffuse_offset != RECOMP_D3D_FVF_ABSENT;
+    const bool texcoord = state->sprite || layout->texcoord_offset != RECOMP_D3D_FVF_ABSENT;
+    const uint32_t fvf = RECOMP_D3D_FVF_XYZ | (diffuse ? RECOMP_D3D_FVF_DIFFUSE : 0u) |
+        (texcoord ? 1u << RECOMP_D3D_FVF_TEXCOUNT_SHIFT : 0u);
+    const uint32_t out_stride = recomp_d3d_fvf_stride(fvf);
+    /* shortcut: D3D8's size formula and a 64-pixel cap stand in for NV2A's
+       fixed-point point parameters; port 0x001B6120's encoding if sizes differ. */
+    const float largest = fminf(state->size_max, 64.0f);
+    for (uint32_t i = 0u; i < count; ++i) {
+        const uint8_t *in = vertices + (size_t)(indices[i] - first_vertex) * stride;
+        float p[3], e[3];
+        memcpy(p, in, sizeof p);
+        for (uint32_t c = 0u; c < 3u; ++c)
+            e[c] = p[0] * world_view[c] + p[1] * world_view[4u + c] + p[2] * world_view[8u + c] + world_view[12u + c];
+        const float w = e[0] * projection[3] + e[1] * projection[7] + e[2] * projection[11] + projection[15];
+        float size = state->size;
+        if (state->scale_enable) {
+            const float d = sqrtf(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+            const float q = state->scale[0] + state->scale[1] * d + state->scale[2] * d * d;
+            size = q > 0.0f ? viewport_height * size / sqrtf(q) : largest;
+        }
+        size = fminf(fmaxf(size, state->size_min), largest);
+        /* Half the quad in view units: size pixels at this clip w. */
+        float hx = size * w / (viewport_width * fabsf(projection[0]));
+        float hy = size * w / (viewport_height * fabsf(projection[5]));
+        if (!(w > 0.0f) || !isfinite(hx) || !isfinite(hy)) hx = hy = 0.0f;
+        for (uint32_t k = 0u; k < 4u; ++k) {
+            uint8_t *out = out_vertices + (size_t)(4u * i + k) * out_stride;
+            const float position[3] = {e[0] + corner[k][0] * hx, e[1] + corner[k][1] * hy, e[2]};
+            memcpy(out, position, sizeof position);
+            out += sizeof position;
+            if (diffuse) {
+                memcpy(out, in + layout->diffuse_offset, 4u);
+                out += 4u;
+            }
+            if (state->sprite) {
+                const float uv[2] = {0.5f + 0.5f * corner[k][0], 0.5f - 0.5f * corner[k][1]};
+                memcpy(out, uv, sizeof uv);
+            } else if (texcoord) {
+                memcpy(out, in + layout->texcoord_offset, 8u);
+            }
+        }
+        for (uint32_t k = 0u; k < 6u; ++k) out_indices[6u * i + k] = (uint16_t)(4u * i + quad[k]);
+    }
+    return fvf;
+}
+
 uint32_t recomp_d3d_draw_vertex_bytes(uint32_t stride, uint32_t max_index)
 {
     uint64_t bytes;
@@ -215,4 +281,53 @@ RecompD3dDrawResult recomp_d3d_draw_indexed(
     result.plan.vertex_stride = state->stream0.stride;
     result.plan.fvf = state->fvf;
     return result;
+}
+
+void recomp_d3d_quad_texcoord_clamp(
+    const void *vertices,
+    uint32_t stride,
+    uint32_t vertex_count,
+    uint32_t texcoord_offset,
+    float bounds[4])
+{
+    /* Per vertex: screen x, y, then texcoord u, v. */
+    float v[4][4], lo[4], hi[4], rhw[4];
+    bounds[0] = bounds[1] = -FLT_MAX;
+    bounds[2] = bounds[3] = FLT_MAX;
+    if (vertices == NULL || vertex_count != 4u || texcoord_offset == RECOMP_D3D_FVF_ABSENT) return;
+    for (uint32_t i = 0u; i < 4u; ++i) {
+        const uint8_t *vertex = (const uint8_t *)vertices + i * stride;
+        memcpy(v[i], vertex, 2u * sizeof(float));
+        memcpy(&rhw[i], vertex + 3u * sizeof(float), sizeof(float));
+        memcpy(v[i] + 2, vertex + texcoord_offset, 2u * sizeof(float));
+    }
+    /* Unequal RHW interpolates perspective-correct, so the inset is not affine. */
+    if (rhw[1] != rhw[0] || rhw[2] != rhw[0] || rhw[3] != rhw[0]) return;
+    for (uint32_t c = 0u; c < 4u; ++c) {
+        lo[c] = hi[c] = v[0][c];
+        for (uint32_t i = 1u; i < 4u; ++i) {
+            lo[c] = fminf(lo[c], v[i][c]);
+            hi[c] = fmaxf(hi[c], v[i][c]);
+        }
+        if (!isfinite(lo[c]) || !isfinite(hi[c])) return;
+    }
+    if (!(hi[0] > lo[0]) || !(hi[1] > lo[1])) return;
+    /* Each corner's texcoord must sit on the matching (or mirrored) edge. */
+    for (uint32_t axis = 0u; axis < 2u; ++axis) {
+        int flip = -1;
+        for (uint32_t i = 0u; i < 4u; ++i) {
+            const float p = v[i][axis], t = v[i][axis + 2u];
+            if ((p != lo[axis] && p != hi[axis]) ||
+                (t != lo[axis + 2u] && t != hi[axis + 2u])) return;
+            if (lo[axis + 2u] == hi[axis + 2u]) continue;
+            const int f = (p == hi[axis]) != (t == hi[axis + 2u]);
+            if (flip < 0) flip = f;
+            else if (flip != f) return;
+        }
+    }
+    for (uint32_t axis = 0u; axis < 2u; ++axis) {
+        const float inset = 0.5f * (hi[axis + 2u] - lo[axis + 2u]) / (hi[axis] - lo[axis]);
+        bounds[axis] = lo[axis + 2u] + inset;
+        bounds[axis + 2u] = hi[axis + 2u] - inset;
+    }
 }

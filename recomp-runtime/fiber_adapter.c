@@ -1,6 +1,7 @@
 #include "fiber_adapter.h"
 #include "cri_service_adapter.h"
 #include "d3d_frame_adapter.h"
+#include "doa3_build.h"
 #include "stop_report.h"
 #include "xbox_memory_layout.h"
 
@@ -9,14 +10,18 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 enum {
     XAPI_MINIMUM_FIBER_STACK = 0x3000u,
 };
 
-/* XAPILIB 3911, verified against DOA3; see docs/doa3-fibers.md. */
+/* XAPILIB 3911, verified against DOA3; see docs/doa3-fibers.md. The hooks are
+   USA keys; the TLS index is read directly, and Japan 3.1 keeps it at
+   0x0040A178 (SwitchToFiber 0x0018C9D3). */
 const RecompFiberBindings recomp_fiber_doa3_bindings = {
-    0x00164f50u, 0x00164fdcu, 0x00164fefu, 0x0016502eu, 0x00b228c8u,
+    0x00164f50u, 0x00164fdcu, 0x00164fefu, 0x0016502eu,
+    DOA3(0x00b228c8u, 0x0040a178u),
 };
 const RecompFiberBindings recomp_fiber_doaxbv_bindings = {
     0x00182fbbu, 0x00183047u, 0x0018305au, 0x00183099u, 0x003b5258u,
@@ -350,10 +355,65 @@ bool recomp_doa3_skip_legal_notice(uint32_t entry_esp)
     return true;
 }
 
+/* DOA3's select-screen loader task (USA 0x000CD070, Japan 0x000D33B0) yields
+   once per check of its four 32-byte request slots, so a cursor move waits up
+   to four frames before its portrait load starts, twice per switch. When the
+   task resumes idle (no load in flight) on an empty slot, point its slot
+   cursor at the next pending slot so this frame's check takes it. */
+bool recomp_doa3_select_next_request(uint32_t entry_esp)
+{
+    enum {
+        RESUME = DOA3(0x000cd087u, 0x000d33c7u),
+        SLOTS = DOA3(0x00860ff0u, 0x009b7910u),
+    };
+    /* USA keeps the in-flight flag in EBP, which the yield pushed just below
+       its return address; Japan keeps it in EDI. */
+    uint32_t *cursor = DOA3(&recomp_runtime.registers.edi, &recomp_runtime.registers.esi);
+    uint32_t busy = DOA3(*recomp_memory_u32(entry_esp + 24u), recomp_runtime.registers.edi);
+
+    if (entry_esp > UINT32_MAX - 32u ||
+        *recomp_memory_u32(entry_esp + 28u) != RESUME || busy != 0u ||
+        *recomp_memory(SLOTS + (*cursor & 3u) * 32u, 1u) != 0u) {
+        return false;
+    }
+    for (uint32_t step = 1u; step < 4u; ++step) {
+        uint32_t slot = (*cursor + step) & 3u;
+        if (*recomp_memory(SLOTS + slot * 32u, 1u) != 0u) {
+            *cursor = slot;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* DOA3's file wait (USA 0x0007E860, Japan 0x00085D70) polls ADXF_GetStat and
+   yields a frame per poll, including the poll that finds the file done and
+   closes it (BL = 0), after which it returns. ADXF_GetStat now finishes a
+   file within one poll, so that trailing yield is the only per-file delay;
+   returning from it at once lets the loader open the next file this frame. */
+bool recomp_doa3_skip_done_file_wait(uint32_t entry_esp)
+{
+    return entry_esp <= UINT32_MAX - 32u &&
+        *recomp_memory_u32(entry_esp + 28u) == DOA3(0x0007e8adu, 0x00085dbdu) &&
+        (recomp_runtime.registers.ebx & 0xffu) == 0u;
+}
+
+static RecompFiberSwitchHook switch_hook;
+
+void recomp_fiber_set_switch_hook(RecompFiberSwitchHook hook)
+{
+    switch_hook = hook;
+}
+
 static void switch_to_fiber_adapter(void)
 {
     uint32_t entry_esp = recomp_runtime.registers.esp;
     uint32_t result = recomp_runtime.registers.eax;
+    if (tls_index_address == recomp_fiber_doa3_bindings.tls_index &&
+        recomp_doa3_skip_done_file_wait(entry_esp)) {
+        recomp_runtime.registers.esp = entry_esp + 8u;
+        return;
+    }
     uint32_t target_handle = stack_argument(entry_esp, 0u);
     RecompFiber *outgoing = recomp_fiber_current(&fiber_model);
     RecompFiber *target = recomp_fiber_find(&fiber_model, target_handle);
@@ -363,6 +423,10 @@ static void switch_to_fiber_adapter(void)
     if (outgoing == NULL || target == NULL || outgoing_host == NULL ||
         target_host == NULL) {
         fail_fiber("unknown-switch", target_handle);
+    }
+    if (switch_hook != NULL && switch_hook(outgoing->guest_handle, target_handle)) {
+        finish(entry_esp, 1u, result);
+        return;
     }
 #ifdef RECOMP_DOAXBV_BINDINGS
     /* Round 119 probe. Screen 7 (the island map) reaches a cooperative wait in
@@ -604,6 +668,43 @@ static void switch_to_fiber_adapter(void)
         }
     }
 #endif
+    /* Opt-in RECOMP_FIBER_WAIT: when a fiber yields from a new place, print
+       the code addresses on its guest stack (likely callers) to locate a
+       task that waits forever. */
+    {
+        static const char *wait_trace;
+        static bool wait_trace_read;
+        static uint32_t wait_lines;
+        static struct { uint32_t handle, sites[8]; } last[64];
+
+        if (!wait_trace_read) {
+            wait_trace_read = true;
+            wait_trace = getenv("RECOMP_FIBER_WAIT");
+        }
+        if (wait_trace != NULL && wait_lines < 4000u) {
+            uint32_t sites[8] = {0};
+            unsigned count = 0u, slot = 0u;
+
+            for (uint32_t i = 0u; i < 96u && count < 8u; ++i) {
+                uint32_t word = *recomp_memory_u32(entry_esp + i * 4u);
+                if (word >= 0x00011000u && word < 0x00200000u) sites[count++] = word;
+            }
+            while (slot < 63u && last[slot].handle != 0u &&
+                   last[slot].handle != outgoing->guest_handle) {
+                ++slot;
+            }
+            if (memcmp(last[slot].sites, sites, sizeof sites) != 0) {
+                last[slot].handle = outgoing->guest_handle;
+                memcpy(last[slot].sites, sites, sizeof sites);
+                ++wait_lines;
+                fprintf(stderr, "recomp fiber wait: fiber=0x%08" PRIx32
+                    " swap=%" PRIu32 " sites=%x %x %x %x %x %x %x %x\n",
+                    outgoing->guest_handle, recomp_d3d_frame_adapter_swap_counter(),
+                    sites[0], sites[1], sites[2], sites[3],
+                    sites[4], sites[5], sites[6], sites[7]);
+            }
+        }
+    }
     if (target_handle == outgoing->guest_handle) {
         finish(entry_esp, 1u, result);
         return;
@@ -676,6 +777,7 @@ static void switch_to_fiber_adapter(void)
     recomp_runtime.registers.eax = result;
     if (tls_index_address == recomp_fiber_doa3_bindings.tls_index) {
         (void)recomp_doa3_skip_legal_notice(entry_esp);
+        (void)recomp_doa3_select_next_request(entry_esp);
     }
 }
 

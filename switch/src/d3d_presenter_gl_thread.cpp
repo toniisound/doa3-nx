@@ -180,7 +180,7 @@ void run(PresenterThread &thread, RecompD3dPresenterConfig config)
         peak.entries = std::max(peak.entries, used.entries);
         peak.commands = std::max(peak.commands, used.commands);
         peak.payload_words = std::max(peak.payload_words, used.payload_words);
-        peak.span_slots = std::max(peak.span_slots, used.span_slots);
+        peak.spans = std::max(peak.spans, used.spans);
         packet->clear();
         try {
             packet->reserve(peak);

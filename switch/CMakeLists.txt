@@ -47,6 +47,9 @@ add_compile_options(
     $<$<COMPILE_LANGUAGE:C,CXX>:-Wno-unused-parameter>)
 
 set(RECOMP_PROGRAM_DIR "" CACHE PATH "Authenticated complete generated-source snapshot")
+# The disc version the program was lifted from (switch/program_info.py).
+set(RECOMP_PROGRAM_FORWARDS "program_forwards.c" CACHE STRING "program_forwards.c (USA 3.0) or program_forwards_jp.c (Japan 3.1)")
+option(RECOMP_DOA3_JP "The lifted XBE is Japan 3.1 (D3D8 4134)" OFF)
 set(RECOMP_PROGRAM_MANIFEST_SHA256 "" CACHE STRING "SHA-256 of the generated-source manifest")
 set(RECOMP_PROGRAM_EBP_EXPECTED "" CACHE STRING "Expected EBP prologue override count")
 if(NOT RECOMP_PROGRAM_DIR OR NOT RECOMP_PROGRAM_MANIFEST_SHA256)
@@ -141,7 +144,7 @@ foreach(_source IN LISTS _recomp_program_sources)
         list(APPEND _recomp_program_definitions "${_name}")
     endforeach()
 endforeach()
-foreach(_adapter_source program_adapters.c program_forwards.c)
+foreach(_adapter_source program_adapters.c ${RECOMP_PROGRAM_FORWARDS})
     file(READ "${RUNTIME}/${_adapter_source}" _adapter_text)
     string(REGEX MATCHALL
         "void[ \t\r\n]+sub_[0-9A-Fa-f]+[ \t\r\n]*\\([ \t\r\n]*void[ \t\r\n]*\\)"
@@ -193,7 +196,7 @@ message(STATUS "Applied ${_ebp_applied} EBP overrides; ${_missing_count} fail-lo
 # ---------------------------------------------------------------------------
 set(_runtime_sources
     doa3_collision_adapter.c runtime.c stop_report.c runner.cpp
-    controller_settings.cpp program_adapters.c guest_heap.c program_forwards.c
+    controller_settings.cpp program_adapters.c guest_heap.c ${RECOMP_PROGRAM_FORWARDS}
     xapi_clock.cpp xapi_time_adapter.cpp program_manual.c save_adapter.c
     d3d_creation_model.c d3d_creation_adapter.c d3d_draw_model.c d3d_draw_adapter.c
     d3d_frame_model.c d3d_frame_adapter.c d3d_miniport_adapter.c d3d_vblank.cpp
@@ -212,6 +215,9 @@ set(_runtime_sources
     kernel_interrupt.c kernel_file.c save_transaction.cpp kernel_memory.c
     kernel_rtl.c kernel_crypto.c recomp_math.c kernel_thread.c native_fiber.c
     kernel_video.c host_diagnostics.cpp input_log.c
+    costume_inject.c suit_recipe.c suit_joints.c suit_hands.c suit_legs.c suit_skirt.c
+    suit_chain.c body_joints.c free_camera.c free_camera_adapter.c scene_freeze.c
+    scene_freeze_adapter.c screenshot.c overlay_text.c
     win32_compat.c fiber_switch_arm64.S)
 list(TRANSFORM _runtime_sources PREPEND "${RUNTIME}/")
 
@@ -248,6 +254,7 @@ add_executable(doa3-nx
 target_compile_definitions(doa3-nx PRIVATE
     RECOMP_FULL_PROGRAM
     RECOMP_D3D_FRAME_ENABLED
+    $<$<BOOL:${RECOMP_DOA3_JP}>:RECOMP_DOA3_JP_BINDINGS>
     DOA3_NX_VERSION="${DOA3_NX_VERSION}")
 # switch/include comes first: it supplies the POSIX headers newlib lacks.
 target_include_directories(doa3-nx BEFORE PRIVATE

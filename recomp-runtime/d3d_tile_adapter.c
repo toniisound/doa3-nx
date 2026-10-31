@@ -1,5 +1,6 @@
 #include "d3d_tile_adapter.h"
 #include "d3d_tile_model.h"
+#include "doa3_build.h"
 #include "stop_report.h"
 
 #include <inttypes.h>
@@ -11,7 +12,8 @@ enum {
     D3D_DEVICE_GLOBAL = 0x001f2978u,
 #else
     D3D_DEVICE_SET_TILE_ADDRESS = 0x001b1f30u,
-    D3D_DEVICE_GLOBAL = 0x001c3390u,
+    D3D_DEVICE_GLOBAL = DOA3(0x001c3390u, 0x001ede80u),
+    D3D_DEVICE_TILES = DOA3(0x21bcu, 0x211cu),
 #endif
 };
 
@@ -43,7 +45,7 @@ void recomp_d3d_set_tile_adapter(void)
     }
 
 #ifndef RECOMP_DOAXBV_BINDINGS
-    destination_address -= RECOMP_D3D_TILE_ARRAY_OFFSET - 0x21bcu;
+    destination_address -= RECOMP_D3D_TILE_ARRAY_OFFSET - D3D_DEVICE_TILES;
 #endif
     if (source_address != 0u) {
         /* The source pointer arrives unchecked; words 1 and 5 are read at

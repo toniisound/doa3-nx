@@ -294,11 +294,12 @@ XbeParseResult XbeParser::parse(const std::filesystem::path& path) const
         certificate.timeDate = readU32(bytes, *certificateOffset + 0x04);
         certificate.titleId = readU32(bytes, *certificateOffset + 0x08);
         certificate.title = readUtf16LeTitle(bytes, *certificateOffset + 0x0C, 0x50);
-        certificate.mediaFlags = readU32(bytes, *certificateOffset + 0xB4);
-        certificate.gameRegion = readU32(bytes, *certificateOffset + 0xB8);
-        certificate.gameRatings = readU32(bytes, *certificateOffset + 0xBC);
-        certificate.diskNumber = readU32(bytes, *certificateOffset + 0xC0);
-        certificate.version = readU32(bytes, *certificateOffset + 0xC4);
+        // After the title (0x0C, 0x50 bytes) come 16 alternate title IDs (0x5C, 0x40 bytes).
+        certificate.mediaFlags = readU32(bytes, *certificateOffset + 0x9C);
+        certificate.gameRegion = readU32(bytes, *certificateOffset + 0xA0);
+        certificate.gameRatings = readU32(bytes, *certificateOffset + 0xA4);
+        certificate.diskNumber = readU32(bytes, *certificateOffset + 0xA8);
+        certificate.version = readU32(bytes, *certificateOffset + 0xAC);
     }
 
     if (metadata.header.tlsAddress != 0) {

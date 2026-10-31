@@ -56,7 +56,7 @@ static int16_t clamp_axis(int32_t value)
     return (int16_t)value;
 }
 
-bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
+static bool sample_pad(uint32_t port, RecompInputGamepad *gamepad)
 {
     if (gamepad == NULL || port >= RECOMP_INPUT_PORT_COUNT || port >= NX_PORT_COUNT) {
         return false;
@@ -119,6 +119,45 @@ bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
     }
     gamepad->thumb_rx = clamp_axis(right.x);
     gamepad->thumb_ry = clamp_axis(right.y);
+    return true;
+}
+
+static RecompInputComboHook combo_hook;
+static RecompInputCaptureHook capture_hook;
+
+void recomp_input_host_set_combo_hook(RecompInputComboHook hook) { combo_hook = hook; }
+void recomp_input_host_set_capture_hook(RecompInputCaptureHook hook) { capture_hook = hook; }
+
+/* No keyboard or mouse on the Switch. */
+bool recomp_input_host_key(RecompInputHostKey key)
+{
+    (void)key;
+    return false;
+}
+
+bool recomp_input_host_mouse_drag(float *dx, float *dy)
+{
+    if (dx) *dx = 0.0f;
+    if (dy) *dy = 0.0f;
+    return false;
+}
+
+bool recomp_input_host_sample(uint32_t port, RecompInputGamepad *gamepad)
+{
+    if (!sample_pad(port, gamepad)) return false;
+    const uint16_t stick_clicks = gamepad->buttons & (XBOX_LEFT_THUMB | XBOX_RIGHT_THUMB);
+    if (combo_hook != NULL) {
+        /* While a combo hook is set the stick clicks stay with the runtime;
+           a combo or menu keeps the rest of the pad from the game as well. */
+        const bool held_back = combo_hook(port, gamepad);
+        gamepad->buttons &= (uint16_t)~(XBOX_LEFT_THUMB | XBOX_RIGHT_THUMB);
+        if (held_back) {
+            gamepad->buttons = 0u;
+            memset(gamepad->analog_buttons, 0, sizeof gamepad->analog_buttons);
+            gamepad->thumb_lx = gamepad->thumb_ly = gamepad->thumb_rx = gamepad->thumb_ry = 0;
+        }
+    }
+    if (capture_hook != NULL) capture_hook(port, gamepad, stick_clicks);
     return true;
 }
 
