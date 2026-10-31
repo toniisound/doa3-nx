@@ -10,9 +10,10 @@ This repository keeps its full history and code; everything Switch-specific live
 > [!IMPORTANT]
 > This repository contains **no game files and no prebuilt `.nro`**. The
 > `.nro` carries the game's own executable, translated to C and compiled, so
-> each user builds it from their own legally obtained copy of the **USA**
-> Xbox release, whose `default.xbe` must have SHA-256
-> `e523dd15d0765899a43a1824c023e0219d129e9a8b41e8213e4e645755d2bfa3`.
+> each user builds it from their own legally obtained copy of the Xbox game:
+> **USA 3.0** (`default.xbe` SHA-256
+> `e523dd15d0765899a43a1824c023e0219d129e9a8b41e8213e4e645755d2bfa3`) or
+> **Japan 3.1** (`469cb086048020d04fbc45b05fd5c470b479f06013d77d736c0ea11df5de85df`).
 
 ## Status
 
@@ -62,6 +63,16 @@ cd doa3-nx
    ./switch/build_switch.sh            # JOBS=3 for more parallel jobs
    ```
 
+3. Optional, and much faster (the lifted code runs 30-40 % quicker):
+   profile-guided optimization. Build `PGO=gen ./switch/build_switch.sh`,
+   play a few varied minutes, quit with HOME > Close, copy the `.gcda` files
+   from `sdmc:/switch/doa3-nx/pgo/` to `private/pgo/` and build
+   `PGO=use ./switch/build_switch.sh`. Redo it whenever `build_game.sh`
+   lifts the program again.
+
+After pulling updates, run `git submodule update --init` and, if the lifter
+or the recipe changed, `./build_game.sh` again before the Switch build.
+
    Each generated chunk needs about 3 GB of RAM to compile. The build needs a 256x256 JPEG homebrew menu icon (not included) in
    `private/icon.jpg`.
 
@@ -69,16 +80,18 @@ cd doa3-nx
 
 ```
 sdmc:/switch/doa3-nx/doa3-nx.nro
-sdmc:/switch/doa3-nx/disc/default.xbe     <- the whole extracted USA disc
+sdmc:/switch/doa3-nx/disc/default.xbe     <- the whole extracted disc
 ```
 
 Start it from the homebrew menu, preferably through a game (title takeover)
 for the full memory budget. Saves go to `disc/.recomp-storage`, and each boot
 rewrites `sdmc:/switch/doa3-nx/doa3-nx.log`.
 
-Held at launch, **R** runs unpaced (as fast as the CPU allows). The CPU is not
+Options live in `sdmc:/switch/doa3-nx/doa3-nx.ini`, written with the
+defaults on the first run: `widescreen` (16:9), `native_math`,
+`soft_vblank`, `texcheck_once`, `gl_vsync` and `unpaced`. The CPU is not
 boosted by the app, since boost mode slows the GPU; use sys-clk to raise the
-CPU clock. `-DDOA3_NX_PRESENTER=probe` builds the stage 1 CPU-only presenter.
+CPU clock (1785 MHz, docked and handheld). `-DDOA3_NX_PRESENTER=probe` builds the stage 1 CPU-only presenter.
 
 Controls: Switch B/A/Y/X are Xbox A/B/X/Y by position; L/R are Black/White,
 ZL/ZR the triggers, + is START and - is BACK. Quit with HOME or
