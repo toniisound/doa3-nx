@@ -294,6 +294,9 @@ elseif(DOA3_NX_PGO STREQUAL "USE")
 endif()
 set_source_files_properties(${_recomp_program_sources} PROPERTIES
     COMPILE_OPTIONS "${DOA3_NX_GENERATED_OPT};-w${_func_profile_flags}${_native_flags}${_pgo_flags}")
+# Logged at boot, so a log tells which build produced it.
+set_property(SOURCE "${NX_SRC}/nx_main.cpp" APPEND PROPERTY COMPILE_DEFINITIONS
+    "DOA3_NX_BUILD_INFO=\"pgo=${DOA3_NX_PGO} opt=${DOA3_NX_GENERATED_OPT} native=${DOA3_NX_NATIVE} profile=${DOA3_NX_FUNC_PROFILE}\"")
 # x87 rounding: no fused multiply-add in the native math.
 set_source_files_properties("${NX_SRC}/doa3_nx_math.c" PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
 # Direct (not GOT) access to globals from C, and libm calls such as sqrt

@@ -377,6 +377,9 @@ int main(int argc, char **argv)
     redirectStderrToLog();
     std::fprintf(stderr, "DOA3 NX %s (Toniisound), based on NoRain211/doa3-re\n",
         DOA3_NX_VERSION);
+#if defined(DOA3_NX_BUILD_INFO)
+    std::fprintf(stderr, "[nx] build: %s\n", DOA3_NX_BUILD_INFO);
+#endif
 
     // The boot stays on a black screen until the intro; the console only
     // shows text for a missing disc or a stop (see __wrap_exit).
