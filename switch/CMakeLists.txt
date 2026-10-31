@@ -20,7 +20,8 @@ if(NOT NINTENDO_SWITCH)
     message(FATAL_ERROR "Configure with -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake")
 endif()
 
-set(DOA3_NX_VERSION "0.1.0" CACHE STRING "Version shown in the homebrew menu")
+# Follows the doa3-re release this port is merged with (CHANGELOG.md).
+set(DOA3_NX_VERSION "0.4")
 set(DOA3_NX_ICON "" CACHE FILEPATH "Optional 256x256 JPEG icon for the .nro")
 
 set(CMAKE_C_STANDARD 11)
