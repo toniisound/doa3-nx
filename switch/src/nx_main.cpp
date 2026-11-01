@@ -334,20 +334,30 @@ struct BootOptions {
     bool gl_vsync = false;
     bool unpaced = false;
     bool widescreen = true;
+    int resolution = 720; // render height: 720, 600 or 480 (the boot menu)
 };
+
+void writeOptions(const BootOptions &options)
+{
+    FILE *out = std::fopen(kOptions, "w");
+    if (out == nullptr) return;
+    std::fprintf(out,
+        "; DOA3 NX options (1 = on, 0 = off). resolution is the last choice of the\n"
+        "; boot menu (720, 600 or 480). Holding a button at boot also switches one\n"
+        "; for that run: X native_math off, Y texcheck_once on, ZL soft_vblank off,\n"
+        "; L gl_vsync on, R unpaced on.\n"
+        "resolution=%d\nwidescreen=%d\nnative_math=%d\nsoft_vblank=%d\ntexcheck_once=%d\ngl_vsync=%d\nunpaced=%d\n",
+        options.resolution, options.widescreen, options.native_math, options.soft_vblank,
+        options.texcheck_once, options.gl_vsync, options.unpaced);
+    std::fclose(out);
+}
 
 BootOptions readOptions()
 {
     BootOptions options;
     FILE *file = std::fopen(kOptions, "r");
     if (file == nullptr) {
-        if (FILE *out = std::fopen(kOptions, "w")) {
-            std::fputs("; DOA3 NX options (1 = on, 0 = off). Holding a button at boot also\n"
-                "; switches one for that run: X native_math off, Y texcheck_once on,\n"
-                "; ZL soft_vblank off, L gl_vsync on, R unpaced on.\n"
-                "widescreen=1\nnative_math=1\nsoft_vblank=1\ntexcheck_once=0\ngl_vsync=0\nunpaced=0\n", out);
-            std::fclose(out);
-        }
+        writeOptions(options);
         return options;
     }
     char line[128];
@@ -363,9 +373,61 @@ BootOptions readOptions()
         else if (!std::strcmp(key, "gl_vsync")) options.gl_vsync = on;
         else if (!std::strcmp(key, "unpaced")) options.unpaced = on;
         else if (!std::strcmp(key, "widescreen")) options.widescreen = on;
+        else if (!std::strcmp(key, "resolution") && (value == 720 || value == 600 || value == 480))
+            options.resolution = value;
     }
     std::fclose(file);
     return options;
+}
+
+// Boot menu: the render resolution, every launch, the last choice marked.
+// Returns false when the user leaves with + or HOME.
+bool chooseResolution(PadState &pad, BootOptions &options)
+{
+    struct Choice { int height; const char *wide; const char *narrow; };
+    static const Choice choices[] = {
+        {720, "1280x720", "960x720"},
+        {600, "1067x600", "800x600"},
+        {480, "854x480", "640x480"},
+    };
+    constexpr int kCount = sizeof choices / sizeof choices[0];
+    int selected = 0;
+    for (int i = 0; i < kCount; ++i) {
+        if (choices[i].height == options.resolution) selected = i;
+    }
+    bool redraw = true;
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        const u64 down = padGetButtonsDown(&pad);
+        if (down & (HidNpadButton_Up | HidNpadButton_StickLUp)) {
+            selected = (selected + kCount - 1) % kCount;
+            redraw = true;
+        }
+        if (down & (HidNpadButton_Down | HidNpadButton_StickLDown)) {
+            selected = (selected + 1) % kCount;
+            redraw = true;
+        }
+        if (down & HidNpadButton_A) {
+            options.resolution = choices[selected].height;
+            return true;
+        }
+        if (down & HidNpadButton_Plus) return false;
+        if (redraw) {
+            redraw = false;
+            std::printf("\x1b[2J\x1b[1;1H");
+            std::printf("\n  DOA3 NX %s\n\n", DOA3_NX_VERSION);
+            std::printf("  Resolucion\n\n");
+            for (int i = 0; i < kCount; ++i) {
+                std::printf("  %s %dp  (%s)%s\n", i == selected ? ">" : " ", choices[i].height,
+                    options.widescreen ? choices[i].wide : choices[i].narrow,
+                    i == 0 ? "  mejor imagen" : i == kCount - 1 ? "  original de Xbox" : "");
+            }
+            std::printf("\n  Arriba/Abajo: elegir    A: jugar    +: salir\n");
+            consoleUpdate(nullptr);
+        }
+        svcSleepThread(16'000'000);
+    }
+    return false;
 }
 
 } // namespace
@@ -441,6 +503,22 @@ int main(int argc, char **argv)
     if (options.texcheck_once) setenv("RECOMP_GL_TEXCHECK_ONCE", "1", 1);
     // gl_vsync: the render thread also waits for vblank (old double vsync).
     if (options.gl_vsync) setenv("RECOMP_GL_VSYNC", "1", 1);
+    if (!chooseResolution(pad, options)) {
+        std::fprintf(stderr, "[nx] left from the boot menu\n");
+        consoleExit(nullptr);
+        console_ready = false;
+        return 0;
+    }
+    writeOptions(options); // remembers the choice for the next menu
+    {
+        // The game renders 640x480; the presenter scales it to this height.
+        char scale[16];
+        std::snprintf(scale, sizeof scale, "%.4f", options.resolution / 480.0);
+        setenv("RECOMP_D3D_SCALE", scale, 1);
+    }
+    std::printf("\x1b[2J");
+    consoleUpdate(nullptr);
+    std::fprintf(stderr, "[nx] resolution: %dp\n", options.resolution);
     std::fprintf(stderr, "[nx] options: widescreen=%d native_math=%d soft_vblank=%d texcheck_once=%d gl_vsync=%d unpaced=%d\n",
         options.widescreen, options.native_math, options.soft_vblank, options.texcheck_once, options.gl_vsync, options.unpaced);
     consoleUpdate(nullptr);
