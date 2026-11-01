@@ -33,6 +33,7 @@ extern "C" void __real_exit(int code) __attribute__((noreturn));
 
 extern "C" int doa3_nx_native_enabled; // doa3_nx_math.c
 
+extern "C" int doa3_nx_boot_menu(int initial_height, const char *version); // boot_menu.cpp
 extern "C" {
 static void flushLog(void); // below, with the log devoptab
 }
@@ -380,54 +381,20 @@ BootOptions readOptions()
     return options;
 }
 
-// Boot menu: the render resolution, every launch, the last choice marked.
-// Returns false when the user leaves with + or HOME.
+// Boot menu (boot_menu.cpp): the render resolution, every launch, the last
+// choice marked. It draws on its own framebuffer, so the text console lets go
+// of the window meanwhile and comes back for error screens afterwards.
 bool chooseResolution(PadState &pad, BootOptions &options)
 {
-    struct Choice { int height; const char *wide; const char *narrow; };
-    static const Choice choices[] = {
-        {720, "1280x720", "960x720"},
-        {600, "1067x600", "800x600"},
-        {480, "854x480", "640x480"},
-    };
-    constexpr int kCount = sizeof choices / sizeof choices[0];
-    int selected = 0;
-    for (int i = 0; i < kCount; ++i) {
-        if (choices[i].height == options.resolution) selected = i;
-    }
-    bool redraw = true;
-    while (appletMainLoop()) {
-        padUpdate(&pad);
-        const u64 down = padGetButtonsDown(&pad);
-        if (down & (HidNpadButton_Up | HidNpadButton_StickLUp)) {
-            selected = (selected + kCount - 1) % kCount;
-            redraw = true;
-        }
-        if (down & (HidNpadButton_Down | HidNpadButton_StickLDown)) {
-            selected = (selected + 1) % kCount;
-            redraw = true;
-        }
-        if (down & HidNpadButton_A) {
-            options.resolution = choices[selected].height;
-            return true;
-        }
-        if (down & HidNpadButton_Plus) return false;
-        if (redraw) {
-            redraw = false;
-            std::printf("\x1b[2J\x1b[1;1H");
-            std::printf("\n  DOA3 NX %s\n\n", DOA3_NX_VERSION);
-            std::printf("  Resolucion\n\n");
-            for (int i = 0; i < kCount; ++i) {
-                std::printf("  %s %dp  (%s)%s\n", i == selected ? ">" : " ", choices[i].height,
-                    options.widescreen ? choices[i].wide : choices[i].narrow,
-                    i == 0 ? "  mejor imagen" : i == kCount - 1 ? "  original de Xbox" : "");
-            }
-            std::printf("\n  Arriba/Abajo: elegir    A: jugar    +: salir\n");
-            consoleUpdate(nullptr);
-        }
-        svcSleepThread(16'000'000);
-    }
-    return false;
+    (void)pad;
+    consoleExit(nullptr);
+    console_ready = false;
+    const int height = doa3_nx_boot_menu(options.resolution, DOA3_NX_VERSION);
+    consoleInit(nullptr);
+    console_ready = true;
+    if (height == 0) return false;
+    options.resolution = height;
+    return true;
 }
 
 } // namespace

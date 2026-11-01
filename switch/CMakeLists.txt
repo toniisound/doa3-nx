@@ -246,6 +246,7 @@ add_executable(doa3-nx
     "${NX_SRC}/input_host_switch.c"
     "${NX_SRC}/audio_output_switch.cpp"
     "${NX_SRC}/doa3_nx_math.c"
+    "${NX_SRC}/boot_menu.cpp"
     ${DOA3_NX_PRESENTER_SOURCES}
     "${_missing_source}"
     ${_recomp_program_sources}
