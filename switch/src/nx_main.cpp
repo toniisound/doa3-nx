@@ -335,7 +335,7 @@ struct BootOptions {
     bool gl_vsync = false;
     bool unpaced = false;
     bool widescreen = true;
-    int resolution = 720; // render height: 720, 600 or 480 (the boot menu)
+    int resolution = 600; // render height: 720, 600 or 480 (the boot menu; 600 by default)
 };
 
 void writeOptions(const BootOptions &options)
