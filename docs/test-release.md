@@ -11,14 +11,9 @@ What you need (Windows 10 or 11, 64-bit):
 
 - Python 3.12 or newer: https://www.python.org/downloads/windows/
   (tick "Add python.exe to PATH" or keep the "py" launcher).
-- CMake 3.20 or newer: https://cmake.org/download/ (add it to PATH).
-- Visual Studio 2022 or newer, or its Build Tools, with the
-  "Desktop development with C++" workload:
-  https://visualstudio.microsoft.com/downloads/
-  If none is installed, the build installs the Visual Studio 2022 Build
-  Tools for you (several GB; Windows asks for permission first).
-- An internet connection for the first build (it downloads SDL3 for
-  controller support and the Capstone Python package).
+- An internet connection for the first build. It downloads the w64devkit
+  compiler (69 MB, about 720 MB unpacked in private\), SDL3 for controller
+  support and the Capstone Python package. Nothing else needs installing.
 - Your Dead or Alive 3 disc as an Xbox ISO, or as an extracted disc folder
   that contains default.xbe.
 
