@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.5 — 2026-11-01
+
+Windows builds without Visual Studio, and one beach launcher on every
+platform.
 
 ### Changed
 
