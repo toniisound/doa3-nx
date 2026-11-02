@@ -28,6 +28,9 @@ platform.
   name (`C:`, the drive's current folder) and reads file types from Windows
   attributes, so files dated before 1970 no longer stop recovery when the
   runtime is built with MinGW.
+- **First build stopping with "Access is denied".** When antivirus is still
+  scanning the new disc links or the extracted disc, the build waits up to 30
+  seconds for the folder to unlock instead of failing on `play-disc.tmp`.
 
 ## 0.4 — 2026-10-27
 
