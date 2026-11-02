@@ -28,7 +28,7 @@ using System.Windows.Forms;
 static class Game
 {
     public static readonly string Root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-    public static readonly string Runner = Path.Combine(Root, @"build\recomp-program\Release\recomp_program_runner.exe");
+    public static readonly string Runner = Path.Combine(Root, @"build\recomp-program\recomp_program_runner.exe");
     public static string Private(string name) { return Path.Combine(Root, "private", name); }
 
     static Dictionary<string, object> ReadJson(string path)

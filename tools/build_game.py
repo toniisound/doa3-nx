@@ -8,7 +8,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import urllib.request
 import uuid
 
@@ -17,6 +16,9 @@ from extract_iso import extract, run_logged, sha256
 ROOT = Path(__file__).resolve().parents[1]
 LIFTER = ROOT / "tools" / "xboxrecomp"
 CAPSTONE = "5.0.7"
+# Windows builds with w64devkit's GCC, CMake and Ninja, fetched on first use.
+W64DEVKIT = "2.11.0"
+W64DEVKIT_SHA256 = "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b"
 # The discs the build accepts, by default.xbe SHA-256: Japan 3.1 is the main
 # build, USA 3.0 is still accepted. "program" is the generated program the
 # runtime was validated against; changing the lifter pin, the recipe's JSON or
@@ -177,32 +179,28 @@ def ask_movies(source):
     return not answer.strip().casefold().startswith("n")
 
 
-def has_msvc():
-    # Without it CMake falls back to NMake and fails with a confusing "-A x64" error.
-    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                   "Microsoft Visual Studio", "Installer", "vswhere.exe")
-    if not vswhere.exists():
-        return False
-    found = subprocess.run([vswhere, "-latest", "-products", "*", "-requires",
-                            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                            "-property", "installationPath"], capture_output=True, text=True)
-    return bool(found.stdout.strip())
-
-
-def install_msvc():
-    # VS 2022 Build Tools rather than 2026: every CMake from 3.20 knows its generator.
-    print("Installing the Visual Studio 2022 C++ Build Tools (several GB); accept the "
-          "Windows prompt and wait for the installer to finish.", flush=True)
-    with tempfile.TemporaryDirectory() as folder:
-        bootstrapper = Path(folder, "vs_BuildTools.exe")
-        urllib.request.urlretrieve("https://aka.ms/vs/17/release/vs_BuildTools.exe", bootstrapper)
-        code = subprocess.run([bootstrapper, "--passive", "--wait", "--norestart",
-                               "--add", "Microsoft.VisualStudio.Workload.VCTools",
-                               "--includeRecommended"]).returncode
-    # 3010: installed, a restart is recommended but the build works without one.
-    if code not in (0, 3010) or not has_msvc():
-        raise ValueError('Install Visual Studio 2022 or newer, or its Build Tools, with the '
-                         f'"Desktop development with C++" workload (installer exit code {code})')
+def w64devkit():
+    """The pinned w64devkit's bin folder, downloaded into private/ on first use."""
+    home = ROOT / "private" / f"w64devkit-{W64DEVKIT}"
+    if (home / "bin" / "gcc.exe").exists():
+        return home / "bin"
+    name = f"w64devkit-x64-{W64DEVKIT}.7z.exe"
+    print(f"Downloading the w64devkit {W64DEVKIT} compiler (69 MB, first build only).", flush=True)
+    # Unpacked beside its final name and renamed last, so a broken download never looks complete.
+    staging = home.with_name(home.name + ".tmp")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    archive = staging / name
+    urllib.request.urlretrieve(
+        f"https://github.com/skeeto/w64devkit/releases/download/v{W64DEVKIT}/{name}", archive)
+    if sha256(archive) != W64DEVKIT_SHA256:
+        shutil.rmtree(staging)
+        raise ValueError(f"The downloaded {name} does not match its pinned SHA-256")
+    subprocess.run([archive, f"-o{staging}", "-y"], check=True, stdout=subprocess.DEVNULL)
+    shutil.rmtree(home, ignore_errors=True)
+    (staging / "w64devkit").rename(home)
+    shutil.rmtree(staging)
+    return home / "bin"
 
 
 def build(source, movies=True, extractor=None):
@@ -213,11 +211,11 @@ def build(source, movies=True, extractor=None):
     print(f"Dead or Alive 3 {version['name']}", flush=True)
     print(f"Linking the disc into private/{play}" + ("" if movies else " without movies"), flush=True)
     prepare_play_disc(disc, movies, play)
-    if shutil.which("cmake") is None:
+    if windows:
+        os.environ["PATH"] = str(w64devkit()) + os.pathsep + os.environ["PATH"]
+    elif shutil.which("cmake") is None:
         raise ValueError("Install CMake 3.20 or newer and add it to PATH")
-    if windows and not has_msvc():
-        install_msvc()
-    if not windows and shutil.which("ninja") is None:
+    elif shutil.which("ninja") is None:
         raise ValueError("Install Ninja and add it to PATH")
     try:
         import capstone
@@ -255,7 +253,13 @@ def build(source, movies=True, extractor=None):
         raise ValueError(f"Generated program {manifest} differs from the validated {version['program']}")
 
     build_dir = ROOT / "build" / "recomp-program"
-    generator = ["-A", "x64"] if windows else ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
+    # Earlier Windows builds used Visual Studio; a build folder cannot change generator.
+    cache = build_dir / "CMakeCache.txt"
+    if cache.exists() and "CMAKE_GENERATOR:INTERNAL=Ninja\n" not in cache.read_text(errors="replace"):
+        shutil.rmtree(build_dir)
+    generator = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
+    if windows:
+        generator += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++"]
     if sys.platform.startswith("linux"):
         generator.append("-DRECOMP_FETCH_SDL3=ON")  # used only when the system has no SDL3
     run_logged(["cmake", "-S", ROOT / "recomp-runtime", "-B", build_dir, *generator,
@@ -266,8 +270,7 @@ def build(source, movies=True, extractor=None):
     # Linux builds the settings launcher beside the runner; SteamOS has no compiler.
     targets = ["recomp_program_runner"] + (["recomp_launcher"] if sys.platform.startswith("linux") else [])
     # Generated chunks are large; more jobs than this can exhaust memory.
-    jobs = ["--parallel", str(min(4, os.cpu_count() or 1))] if not windows else []
-    run_logged(["cmake", "--build", build_dir, "--config", "Release", *jobs,
+    run_logged(["cmake", "--build", build_dir, "--parallel", str(min(4, os.cpu_count() or 1)),
                 "--target", *targets], work / "build.log")
     (ROOT / "private" / "disc-path.txt").write_text(str(disc) + "\n", encoding="utf-8")
     # What is installed, for the launchers and the play scripts.
