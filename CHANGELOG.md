@@ -33,9 +33,10 @@ platform.
   seconds for the folder to unlock instead of failing on `play-disc.tmp`.
 - **Fullscreen on 16:10 and other screen shapes** (#45). Above 480p the game
   window covers the whole screen instead of leaving the desktop showing below
-  or beside it. With the 16:9 screen setting, a 16:10 screen is filled without
-  bars; the 3D view loses a little at each side and the HUD and menus are
-  unchanged. Other mismatched shapes get black bars.
+  or beside it. The launcher's Screen setting adds 16:10, which the game
+  renders natively: its projection, fight camera and movies take the 16:10
+  shape, and the HUD and menus keep their 4:3 shape. A screen of another
+  shape gets black bars.
 
 ## 0.4 — 2026-10-27
 
