@@ -71,16 +71,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Download the pinned w64devkit
+      - name: Download the pinned llvm-mingw and CMake
         shell: pwsh
         run: |
-          $bin = python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(build_game.w64devkit())" |
-            Select-Object -Last 1
-          Add-Content $env:GITHUB_PATH $bin
+          python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(*build_game.windows_tools(), sep='\n')" |
+            Select-Object -Last 2 | Add-Content $env:GITHUB_PATH
       - name: Configure public runtime tests
         run: >-
-          cmake -S recomp-runtime -B build/recomp-runtime -G Ninja
-          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          cmake -S recomp-runtime -B build/recomp-runtime -G "MinGW Makefiles"
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
       - name: Build public runtime tests
         run: cmake --build build/recomp-runtime
       - name: Run public runtime tests

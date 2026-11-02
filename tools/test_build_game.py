@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import build_game
 from build_game import MOVIE_STUB, cut_owned_movies, find_disc, prepare_play_disc
@@ -110,30 +111,31 @@ class PlayDiscTests(unittest.TestCase):
             self.assertTrue(build_game.ask_movies(None))
 
 
-class W64devkitTests(unittest.TestCase):
+class WindowsToolsTests(unittest.TestCase):
     def test_download_is_verified_and_unpacked_once(self):
-        def fake_download(url, path):
-            Path(path).write_bytes(b"sfx")
+        with tempfile.TemporaryDirectory() as folder:
+            with zipfile.ZipFile(Path(folder) / "tool.zip", "w") as contents:
+                contents.writestr("tool-1.0-x86_64/bin/tool.exe", b"tool")
+            zipped = (Path(folder) / "tool.zip").read_bytes()
 
-        def fake_unpack(args, **kwargs):
-            """The self-extractor stand-in: -o<folder> receives a w64devkit folder."""
-            gcc = Path(str(args[1])[2:]) / "w64devkit" / "bin" / "gcc.exe"
-            gcc.parent.mkdir(parents=True)
-            gcc.write_bytes(b"gcc")
+        def fake_download(url, path):
+            Path(path).write_bytes(zipped)
 
         with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
                 patch("urllib.request.urlretrieve", side_effect=fake_download) as download, \
-                patch("subprocess.run", side_effect=fake_unpack), patch("builtins.print"):
+                patch("builtins.print"):
             private = Path(folder) / "private"
-            home = private / f"w64devkit-{build_game.W64DEVKIT}"
-            with patch.object(build_game, "W64DEVKIT_SHA256", "0" * 64), \
+            home = private / "tool-1.0"
+            with patch.object(build_game, "WINDOWS_TOOLS", [("tool-1.0", "tool.exe", "https://x/tool.zip", "0" * 64)]), \
                     self.assertRaisesRegex(ValueError, "pinned SHA-256"):
-                build_game.w64devkit()
+                build_game.windows_tools()
             self.assertEqual(list(private.iterdir()), [], "a rejected download leaves nothing")
-            with patch.object(build_game, "W64DEVKIT_SHA256", sha256_of(b"sfx")):
-                self.assertEqual(build_game.w64devkit(), home / "bin")
+            with patch.object(build_game, "WINDOWS_TOOLS",
+                              [("tool-1.0", "tool.exe", "https://x/tool.zip", sha256_of(zipped))]):
+                self.assertEqual(build_game.windows_tools(), [home / "bin"])
+                self.assertEqual((home / "bin" / "tool.exe").read_bytes(), b"tool")
                 self.assertEqual(list(private.iterdir()), [home])
-                self.assertEqual(build_game.w64devkit(), home / "bin")
+                self.assertEqual(build_game.windows_tools(), [home / "bin"])
             self.assertEqual(download.call_count, 2, "an unpacked toolchain is reused")
 
 

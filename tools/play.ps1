@@ -6,14 +6,15 @@ $buildDir = Join-Path $root 'build\recomp-program'
 $exe = Join-Path $buildDir 'recomp_program_runner.exe'
 if ($Build) {
     $cache = Join-Path $buildDir 'CMakeCache.txt'
-    if ((Test-Path $cache) -and -not (Select-String -LiteralPath $cache -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja$' -Quiet)) {
-        throw "build\recomp-program is an older Visual Studio build. Rebuild it once with tools/build_game.py."
+    if ((Test-Path $cache) -and -not (Select-String -LiteralPath $cache -Pattern '^CMAKE_GENERATOR:INTERNAL=MinGW Makefiles$' -Quiet)) {
+        throw "build\recomp-program is an older Visual Studio or w64devkit build. Rebuild it once with tools/build_game.py."
     }
-    # tools/build_game.py configures with w64devkit's GCC, CMake and Ninja.
-    $devkit = Get-ChildItem (Join-Path $root 'private') -Directory -Filter 'w64devkit-*' -ErrorAction SilentlyContinue |
-        Where-Object { Test-Path (Join-Path $_.FullName 'bin\gcc.exe') } |
-        Sort-Object { [version]($_.Name -replace '^w64devkit-', '') } | Select-Object -Last 1
-    if ($devkit) { $env:PATH = (Join-Path $devkit.FullName 'bin') + ";$env:PATH" }
+    # tools/build_game.py configures with llvm-mingw's Clang and make and Kitware's CMake.
+    $py = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
+    $tools = & $py -c "import os, sys; sys.path.insert(0, sys.argv[1]); import build_game; print(os.pathsep.join(map(str, build_game.windows_tools())))" $PSScriptRoot |
+        Select-Object -Last 1
+    if ($LASTEXITCODE -or -not $tools) { throw "Could not set up llvm-mingw and CMake; run tools/build_game.py once." }
+    $env:PATH = $tools + ";$env:PATH"
     cmake --build $buildDir --target recomp_program_runner
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 }

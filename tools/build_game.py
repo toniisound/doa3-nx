@@ -8,17 +8,26 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 import uuid
+import zipfile
 
 from extract_iso import extract, run_logged, sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 LIFTER = ROOT / "tools" / "xboxrecomp"
 CAPSTONE = "5.0.7"
-# Windows builds with w64devkit's GCC, CMake and Ninja, fetched on first use.
-W64DEVKIT = "2.11.0"
-W64DEVKIT_SHA256 = "54c2bb9962e8a30c8270e34c5efc3d5fee579f53087fa7d435b95fbba2af7b2b"
+# Windows builds with llvm-mingw's Clang and mingw32-make, pinned the same as
+# doaxbv-re and doa2u-re, and Kitware's CMake; each is fetched on first use.
+WINDOWS_TOOLS = [
+    ("llvm-mingw-20261006", "clang.exe",
+     "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-x86_64.zip",
+     "317492c456aa27ee607a5919f1d2d38dcdc1112516a24d0bf4b00d078f52d17a"),
+    ("cmake-4.4.5", "cmake.exe",
+     "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+     "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004"),
+]
 # The discs the build accepts, by default.xbe SHA-256: Japan 3.1 is the main
 # build, USA 3.0 is still accepted. "program" is the generated program the
 # runtime was validated against; changing the lifter pin, the recipe's JSON or
@@ -179,28 +188,39 @@ def ask_movies(source):
     return not answer.strip().casefold().startswith("n")
 
 
-def w64devkit():
-    """The pinned w64devkit's bin folder, downloaded into private/ on first use."""
-    home = ROOT / "private" / f"w64devkit-{W64DEVKIT}"
-    if (home / "bin" / "gcc.exe").exists():
-        return home / "bin"
-    name = f"w64devkit-x64-{W64DEVKIT}.7z.exe"
-    print(f"Downloading the w64devkit {W64DEVKIT} compiler (69 MB, first build only).", flush=True)
-    # Unpacked beside its final name and renamed last, so a broken download never looks complete.
-    staging = home.with_name(home.name + ".tmp")
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
-    archive = staging / name
-    urllib.request.urlretrieve(
-        f"https://github.com/skeeto/w64devkit/releases/download/v{W64DEVKIT}/{name}", archive)
-    if sha256(archive) != W64DEVKIT_SHA256:
+def windows_tools():
+    """The pinned Windows tools' bin folders, each downloaded into private/ on first use."""
+    bins = []
+    for name, probe, url, expected in WINDOWS_TOOLS:
+        home = ROOT / "private" / name
+        bins.append(home / "bin")
+        if (home / "bin" / probe).exists():
+            continue
+        print(f"Downloading {name} (first build only).", flush=True)
+        # Unpacked beside its final name and renamed last, so a broken download never looks complete.
+        staging = home.with_name(home.name + ".tmp")
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        archive = staging / "download.zip"
+        urllib.request.urlretrieve(url, archive)
+        if sha256(archive) != expected:
+            shutil.rmtree(staging)
+            raise ValueError(f"The downloaded {url.rsplit('/', 1)[1]} does not match its pinned SHA-256")
+        with zipfile.ZipFile(archive) as contents:
+            contents.extractall(staging / "unpacked")
+        (top,) = (staging / "unpacked").iterdir()  # each ZIP holds one versioned folder
+        shutil.rmtree(home, ignore_errors=True)
+        # Antivirus scans of the fresh executables can briefly lock the folder against renaming.
+        for attempt in range(30):
+            try:
+                top.rename(home)
+                break
+            except PermissionError:
+                if attempt == 29:
+                    raise
+                time.sleep(1)
         shutil.rmtree(staging)
-        raise ValueError(f"The downloaded {name} does not match its pinned SHA-256")
-    subprocess.run([archive, f"-o{staging}", "-y"], check=True, stdout=subprocess.DEVNULL)
-    shutil.rmtree(home, ignore_errors=True)
-    (staging / "w64devkit").rename(home)
-    shutil.rmtree(staging)
-    return home / "bin"
+    return bins
 
 
 def build(source, movies=True, extractor=None):
@@ -212,7 +232,8 @@ def build(source, movies=True, extractor=None):
     print(f"Linking the disc into private/{play}" + ("" if movies else " without movies"), flush=True)
     prepare_play_disc(disc, movies, play)
     if windows:
-        os.environ["PATH"] = str(w64devkit()) + os.pathsep + os.environ["PATH"]
+        os.environ["PATH"] = os.pathsep.join(map(str, windows_tools() + [os.environ["PATH"]]))
+        shutil.rmtree(ROOT / "private" / "w64devkit-2.11.0", ignore_errors=True)  # 0.5's toolchain, 720 MB
     elif shutil.which("cmake") is None:
         raise ValueError("Install CMake 3.20 or newer and add it to PATH")
     elif shutil.which("ninja") is None:
@@ -253,13 +274,14 @@ def build(source, movies=True, extractor=None):
         raise ValueError(f"Generated program {manifest} differs from the validated {version['program']}")
 
     build_dir = ROOT / "build" / "recomp-program"
-    # Earlier Windows builds used Visual Studio; a build folder cannot change generator.
+    # A build folder cannot change generator; earlier Windows builds used
+    # Visual Studio, then Ninja with w64devkit's GCC.
+    generator = ["-G", "MinGW Makefiles" if windows else "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
     cache = build_dir / "CMakeCache.txt"
-    if cache.exists() and "CMAKE_GENERATOR:INTERNAL=Ninja\n" not in cache.read_text(errors="replace"):
+    if cache.exists() and f"CMAKE_GENERATOR:INTERNAL={generator[1]}\n" not in cache.read_text(errors="replace"):
         shutil.rmtree(build_dir)
-    generator = ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
     if windows:
-        generator += ["-DCMAKE_C_COMPILER=gcc", "-DCMAKE_CXX_COMPILER=g++"]
+        generator += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
     if sys.platform.startswith("linux"):
         generator.append("-DRECOMP_FETCH_SDL3=ON")  # used only when the system has no SDL3
     run_logged(["cmake", "-S", ROOT / "recomp-runtime", "-B", build_dir, *generator,
