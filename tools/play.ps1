@@ -3,13 +3,22 @@ param([switch]$Build, [switch]$VSync)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $buildDir = Join-Path $root 'build\recomp-program'
-$exe = Join-Path $buildDir 'Release\recomp_program_runner.exe'
+$exe = Join-Path $buildDir 'recomp_program_runner.exe'
 if ($Build) {
-    cmake --build $buildDir --config Release --target recomp_program_runner
+    $cache = Join-Path $buildDir 'CMakeCache.txt'
+    if ((Test-Path $cache) -and -not (Select-String -LiteralPath $cache -Pattern '^CMAKE_GENERATOR:INTERNAL=Ninja$' -Quiet)) {
+        throw "build\recomp-program is an older Visual Studio build. Rebuild it once with tools/build_game.py."
+    }
+    # tools/build_game.py configures with w64devkit's GCC, CMake and Ninja.
+    $devkit = Get-ChildItem (Join-Path $root 'private') -Directory -Filter 'w64devkit-*' -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path (Join-Path $_.FullName 'bin\gcc.exe') } |
+        Sort-Object { [version]($_.Name -replace '^w64devkit-', '') } | Select-Object -Last 1
+    if ($devkit) { $env:PATH = (Join-Path $devkit.FullName 'bin') + ";$env:PATH" }
+    cmake --build $buildDir --target recomp_program_runner
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 }
 if (-not (Test-Path $exe)) {
-    throw "No Release runner at $exe. Configure build\recomp-program (docs/bring-up.md), then pass -Build."
+    throw "No runner at $exe. Build it with tools/build_game.py, or configure build\recomp-program (docs/bring-up.md) and pass -Build."
 }
 
 # A hard-linked view of the extracted disc keeps the game's cache and saves

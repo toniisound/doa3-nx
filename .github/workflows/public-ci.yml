@@ -63,6 +63,29 @@ jobs:
           }
           exit 0
 
+  # The toolchain tools/build_game.py downloads for players.
+  runtime-tests-mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the pinned w64devkit
+        shell: pwsh
+        run: |
+          $bin = python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(build_game.w64devkit())" |
+            Select-Object -Last 1
+          Add-Content $env:GITHUB_PATH $bin
+      - name: Configure public runtime tests
+        run: >-
+          cmake -S recomp-runtime -B build/recomp-runtime -G Ninja
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+      - name: Build public runtime tests
+        run: cmake --build build/recomp-runtime
+      - name: Run public runtime tests
+        run: ctest --test-dir build/recomp-runtime --output-on-failure
+
   runtime-tests-macos:
     runs-on: macos-latest
     steps:

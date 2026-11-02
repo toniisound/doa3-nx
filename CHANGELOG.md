@@ -4,11 +4,26 @@
 
 ### Changed
 
+- **Windows builds without Visual Studio.** The build downloads the pinned
+  [w64devkit](https://github.com/skeeto/w64devkit) 2.11.0 (GCC 16.2, CMake
+  and Ninja; 69 MB, checked against its SHA-256) into `private/` on its
+  first run instead of installing the Visual Studio 2022 Build Tools, so
+  Python is the only thing to install. CMake is no longer needed either.
+  The runner moves to `build/recomp-program/recomp_program_runner.exe`;
+  rebuild once after updating. Visual Studio 2022 remains an optional way to
+  build the runtime and its tests.
 - **Beach launcher.** The Windows, Linux and macOS launchers share one look:
   a sunset beach between letterbox bars, with page tabs and the chosen page's
   settings side by side in the bottom bar. Left and right move between pages
   and settings. Down opens a page; inside it, up and down change a value. The
   Linux and macOS launchers move to pages too.
+
+### Fixed
+
+- **Save checks on Windows.** Save recovery no longer checks the bare drive
+  name (`C:`, the drive's current folder) and reads file types from Windows
+  attributes, so files dated before 1970 no longer stop recovery when the
+  runtime is built with MinGW.
 
 ## 0.4 — 2026-10-27
 

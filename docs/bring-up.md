@@ -118,11 +118,13 @@ The manifest is computed the way doaxbv-re's `build_game.py` does it: one
 `recomp_funcs.h`, hashed with SHA-256.
 
 ```powershell
-cmake -S recomp-runtime -B build/recomp-program -G "Visual Studio 17 2022" -A x64 `
+# w64devkit's bin on PATH; tools/build_game.py downloads it to private/.
+cmake -S recomp-runtime -B build/recomp-program -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ `
   -DRECOMP_PROGRAM_DIR=private/lift-init2/generated `
   -DRECOMP_PROGRAM_MANIFEST_SHA256=<manifest sha256> `
   -DRECOMP_PROGRAM_EBP_EXPECTED=0
-cmake --build build/recomp-program --config Debug --target recomp_program_runner
+cmake --build build/recomp-program --target recomp_program_runner
 ```
 
 `RECOMP_PROGRAM_EBP_EXPECTED` is 0: upstream's emitter initializes `ebp` itself,

@@ -110,5 +110,32 @@ class PlayDiscTests(unittest.TestCase):
             self.assertTrue(build_game.ask_movies(None))
 
 
+class W64devkitTests(unittest.TestCase):
+    def test_download_is_verified_and_unpacked_once(self):
+        def fake_download(url, path):
+            Path(path).write_bytes(b"sfx")
+
+        def fake_unpack(args, **kwargs):
+            """The self-extractor stand-in: -o<folder> receives a w64devkit folder."""
+            gcc = Path(str(args[1])[2:]) / "w64devkit" / "bin" / "gcc.exe"
+            gcc.parent.mkdir(parents=True)
+            gcc.write_bytes(b"gcc")
+
+        with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
+                patch("urllib.request.urlretrieve", side_effect=fake_download) as download, \
+                patch("subprocess.run", side_effect=fake_unpack), patch("builtins.print"):
+            private = Path(folder) / "private"
+            home = private / f"w64devkit-{build_game.W64DEVKIT}"
+            with patch.object(build_game, "W64DEVKIT_SHA256", "0" * 64), \
+                    self.assertRaisesRegex(ValueError, "pinned SHA-256"):
+                build_game.w64devkit()
+            self.assertEqual(list(private.iterdir()), [], "a rejected download leaves nothing")
+            with patch.object(build_game, "W64DEVKIT_SHA256", sha256_of(b"sfx")):
+                self.assertEqual(build_game.w64devkit(), home / "bin")
+                self.assertEqual(list(private.iterdir()), [home])
+                self.assertEqual(build_game.w64devkit(), home / "bin")
+            self.assertEqual(download.call_count, 2, "an unpacked toolchain is reused")
+
+
 if __name__ == "__main__":
     unittest.main()

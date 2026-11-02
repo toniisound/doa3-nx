@@ -132,6 +132,10 @@
     {
       "sha256": "de346b217c24b4ae309bf87684207ac728a6e7e9527122403bf34ec9e7595d03",
       "reason": "Class ID of the runtime's own audio capture XAPO in audio_capture_xapo.cpp."
+    },
+    {
+      "sha256": "7601af5acc2c5f563b43be03d4dbc3776ce348ca86f46ea4d204b352715884f9",
+      "reason": "Tail of KSDATAFORMAT_SUBTYPE_IEEE_FLOAT from the Windows SDK's ksmedia.h, which audio_capture_xapo.cpp spells out because MinGW links no GUID library for it."
     }
   ],
   "binary_files": [

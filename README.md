@@ -118,10 +118,18 @@ The runtime tests build without any game files or submodules:
 ```powershell
 git clone https://github.com/NoRain211/doa3-re.git
 cd doa3-re
-cmake -S recomp-runtime -B build/recomp-runtime -G "Visual Studio 17 2022"
-cmake --build build/recomp-runtime --config Release --parallel 2
-ctest --test-dir build/recomp-runtime -C Release --output-on-failure
+# Windows: put w64devkit on PATH, downloading it into private/ the first time.
+$env:PATH = (python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(build_game.w64devkit())" | Select-Object -Last 1) + ";$env:PATH"
+cmake -S recomp-runtime -B build/recomp-runtime -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build/recomp-runtime
+ctest --test-dir build/recomp-runtime --output-on-failure
 ```
+
+The `$env:PATH` line uses the [w64devkit](https://github.com/skeeto/w64devkit)
+GCC, CMake and Ninja that `tools/build_game.py` pins; skip it on macOS and
+Linux, or on Windows with another MinGW-w64 GCC on PATH. Visual Studio 2022
+also works: configure with `-G "Visual Studio 17 2022"` and pass
+`--config Release` to the build and `-C Release` to `ctest`.
 
 This produces test executables, not the game runner. Passing tests does not
 establish game accuracy.
@@ -150,9 +158,9 @@ plays with the resolution, anti-aliasing, widescreen and volume you pick; see
 [docs/test-release.md](docs/test-release.md). After that, `DOA3.exe` starts
 the game with those settings. In a checkout,
 `python tools/package_test.py --launchers .` builds both exes. On Windows the build needs
-Python 3.12+, CMake 3.20+ and Visual Studio's C++
-tools; if no Visual Studio C++ tools are installed, the build installs the
-Visual Studio 2022 Build Tools first (several GB, after a Windows prompt).
+only Python 3.12+; its first run downloads
+[w64devkit](https://github.com/skeeto/w64devkit) (GCC, CMake and Ninja;
+69 MB, about 720 MB unpacked) into `private/`.
 On macOS and Linux, extract the release's
 `DOA3-<version>-macOS.tar.gz` or `DOA3-<version>-Linux.tar.gz` and run
 `./build_game.sh` with your ISO, then `./launcher.sh` or `./run_game.sh`; see
