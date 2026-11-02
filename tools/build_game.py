@@ -57,6 +57,17 @@ def use_windows_newlines(generated):
             path.write_bytes(data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
 
 
+def rename_retrying(source, target):
+    """Antivirus scans of freshly written files can briefly lock a folder against renaming."""
+    for attempt in range(31):  # 30 one-second waits
+        try:
+            return source.rename(target)
+        except PermissionError:
+            if attempt == 30:
+                raise
+            time.sleep(1)
+
+
 def program_manifest(generated):
     chunks = sorted(generated.glob("recomp_[0-9][0-9][0-9][0-9].c"))
     members = chunks + [generated / "recomp_dispatch.c", generated / "recomp_funcs.h"]
@@ -127,7 +138,7 @@ def find_disc(source, movies=True, extractor=None):
             raise ValueError(f"{imported} holds game saves; move them out before using another ISO")
         print(f"Replacing {imported}", flush=True)
         shutil.rmtree(imported)
-    staging.rename(imported)
+    rename_retrying(staging, imported)
     return imported / "disc"
 
 
@@ -160,7 +171,7 @@ def prepare_play_disc(disc, movies, name="play-disc"):
                 shutil.copyfile(file, partial)
         os.replace(partial, target)
     if folder != play:
-        folder.rename(play)
+        rename_retrying(folder, play)
 
 
 def cut_owned_movies(disc):
@@ -210,15 +221,7 @@ def windows_tools():
             contents.extractall(staging / "unpacked")
         (top,) = (staging / "unpacked").iterdir()  # each ZIP holds one versioned folder
         shutil.rmtree(home, ignore_errors=True)
-        # Antivirus scans of the fresh executables can briefly lock the folder against renaming.
-        for attempt in range(30):
-            try:
-                top.rename(home)
-                break
-            except PermissionError:
-                if attempt == 29:
-                    raise
-                time.sleep(1)
+        rename_retrying(top, home)
         shutil.rmtree(staging)
     return bins
 
