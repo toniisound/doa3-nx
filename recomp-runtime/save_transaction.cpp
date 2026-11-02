@@ -94,20 +94,40 @@ bool exists_plain(const fs::path &path)
 #endif
 }
 
+#ifdef _WIN32
+/* Attributes, not std::filesystem: MinGW's libstdc++ stats through msvcrt,
+   which fails on any time before 1970, and rollback restores saved times. */
+bool is_directory_plain(const fs::path &path)
+{
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+bool is_file_plain(const fs::path &path)
+{
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+#else
+bool is_directory_plain(const fs::path &path) { return fs::is_directory(path); }
+bool is_file_plain(const fs::path &path) { return fs::is_regular_file(path); }
+#endif
+
 void check_parents(const fs::path &path)
 {
-    fs::path part;
-    for (const auto &component : path) {
+    // Start at the root: a bare "C:" names the drive's current directory.
+    fs::path part = path.root_path();
+    for (const auto &component : path.relative_path()) {
         part /= component;
-        if (exists_plain(part)) require(fs::is_directory(part));
+        if (exists_plain(part)) require(is_directory_plain(part));
     }
 }
 
 void check_tree(const fs::path &path)
 {
     if (!exists_plain(path)) return;
-    require(fs::is_directory(path) || fs::is_regular_file(path));
-    if (fs::is_directory(path)) {
+    require(is_directory_plain(path) || is_file_plain(path));
+    if (is_directory_plain(path)) {
         for (const auto &entry : fs::directory_iterator(path))
             check_tree(entry.path());
     }
@@ -117,12 +137,15 @@ void remove_tree(const fs::path &path)
 {
     check_tree(path);
 #ifdef _WIN32
-    auto clear_readonly = [&](auto &&self, const fs::path &entry) -> void {
+    auto remove_entry = [&](auto &&self, const fs::path &entry) -> void {
         DWORD attributes = GetFileAttributesW(entry.c_str());
         require(attributes != INVALID_FILE_ATTRIBUTES);
-        if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+        const bool directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0u;
+        if (directory) {
+            std::vector<fs::path> children;
             for (const auto &child : fs::directory_iterator(entry))
-                self(self, child.path());
+                children.push_back(child.path());
+            for (const auto &child : children) self(self, child);
         }
         if ((attributes & FILE_ATTRIBUTE_READONLY) != 0u) {
             DWORD writable = attributes & ~(FILE_ATTRIBUTE_READONLY |
@@ -130,8 +153,9 @@ void remove_tree(const fs::path &path)
             if (writable == 0u) writable = FILE_ATTRIBUTE_NORMAL;
             require(SetFileAttributesW(entry.c_str(), writable) != 0);
         }
+        require((directory ? RemoveDirectoryW(entry.c_str()) : DeleteFileW(entry.c_str())) != 0);
     };
-    if (exists_plain(path)) clear_readonly(clear_readonly, path);
+    if (exists_plain(path)) remove_entry(remove_entry, path);
 #else
     /* Unlinking needs write access to the parent, so open read-only directories. */
     if (exists_plain(path) && fs::is_directory(path)) {
@@ -140,8 +164,8 @@ void remove_tree(const fs::path &path)
             if (entry.is_directory())
                 fs::permissions(entry.path(), fs::perms::owner_all, fs::perm_options::add);
     }
-#endif
     fs::remove_all(path);
+#endif
 }
 
 void remove_file(const fs::path &path)
@@ -288,7 +312,7 @@ std::string snapshot_live()
     std::string out(undo_magic, sizeof undo_magic);
     put(out, uint64_t(0));
     if (exists_plain(live)) {
-        require(fs::is_directory(live));
+        require(is_directory_plain(live));
         save_node(out, live, fs::path());
     }
     const uint64_t size = out.size();
@@ -419,7 +443,7 @@ void restore(std::string_view image)
 void recover()
 {
     if (!exists_plain(undo)) return;
-    require(fs::is_regular_file(undo));
+    require(is_file_plain(undo));
     const std::string image = read_file(undo);
     if (image.size() >= sizeof undo_magic) {
         require(std::memcmp(image.data(), undo_magic, sizeof undo_magic) == 0 ||
@@ -441,9 +465,9 @@ void recover()
 
 bool check_journal()
 {
-    require(exists_plain(journal) && fs::is_directory(journal));
+    require(exists_plain(journal) && is_directory_plain(journal));
     const auto version_path = journal / "version";
-    require(exists_plain(version_path) && fs::is_regular_file(version_path));
+    require(exists_plain(version_path) && is_file_plain(version_path));
     /* Reading one byte past the marker proves the file ends there. */
     char buffer[sizeof version];
     std::ifstream stream(version_path, std::ios::binary);
@@ -461,7 +485,7 @@ bool check_journal()
         /* An upgrade interrupted before its rename leaves version.tmp. */
         require(name == "version" || name == "lock" || name == "undo" ||
             (legacy && name == "version.tmp"));
-        require(exists_plain(entry.path()) && fs::is_regular_file(entry.path()));
+        require(exists_plain(entry.path()) && is_file_plain(entry.path()));
     }
     return legacy;
 }
@@ -495,7 +519,7 @@ extern "C" bool recomp_save_initialize(const char *disc_root)
         if (ec) root = fs::absolute(disc_root).lexically_normal();
 #endif
         check_parents(root);
-        require(exists_plain(root) && fs::is_directory(root));
+        require(exists_plain(root) && is_directory_plain(root));
         storage = root / ".recomp-storage";
         live = storage / "partition1"; /* UDATA profiles and TDATA title saves */
         journal = storage / "save-undo-v1";
@@ -506,10 +530,10 @@ extern "C" bool recomp_save_initialize(const char *disc_root)
         bool created = false;
         bool upgrade_version = false;
         if (!exists_plain(journal)) created = fs::create_directory(journal);
-        require(exists_plain(journal) && fs::is_directory(journal));
+        require(exists_plain(journal) && is_directory_plain(journal));
 #ifdef _WIN32
         const auto lock_path = journal / "lock";
-        if (exists_plain(lock_path)) require(fs::is_regular_file(lock_path));
+        if (exists_plain(lock_path)) require(is_file_plain(lock_path));
         journal_lock = CreateFileW(lock_path.c_str(), GENERIC_READ | GENERIC_WRITE,
             0, nullptr, OPEN_ALWAYS, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         require(journal_lock != INVALID_HANDLE_VALUE);
@@ -598,7 +622,7 @@ extern "C" bool recomp_save_end(uint32_t owner, bool success)
             if (exists_plain(live)) {
                 sync_to_disk(live);
                 for (const auto &entry : fs::recursive_directory_iterator(live))
-                    if (entry.is_directory()) sync_to_disk(entry.path());
+                    if (is_directory_plain(entry.path())) sync_to_disk(entry.path());
             } else {
                 sync_to_disk(live.parent_path());
             }
