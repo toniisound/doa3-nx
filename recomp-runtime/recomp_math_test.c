@@ -323,8 +323,13 @@ int main(void)
 {
     int failed = 0;
 
+#ifndef __MINGW32__
+    /* mingw-w64's sin and cos use x87 fsin and fcos, which lose accuracy near
+       multiples of pi and for large arguments. The port's bits match on every
+       build, the other hosts compare them, and the pinned values check them. */
     failed |= run_unary("recomp_sin", recomp_sin, sin, gen_trig, 0x1001u, 1);
     failed |= run_unary("recomp_cos", recomp_cos, cos, gen_trig, 0x1002u, 1);
+#endif
 #ifdef __APPLE__
     /* Apple's libm tan is up to 3 ulp from this port, which stays within 1 ulp
        of the MSVC CRT and glibc; the pinned bits below still check it exactly. */
