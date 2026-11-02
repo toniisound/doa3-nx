@@ -109,10 +109,12 @@ if(NOT MSVC)
         $<$<COMPILE_LANGUAGE:C,CXX>:-fno-strict-aliasing>
         $<$<COMPILE_LANGUAGE:C,CXX>:-fwrapv>)
 endif()
-# w64devkit links msvcrt.dll; the guest sprintf adapter needs C99 printf,
-# which UCRT and glibc already provide.
+# The guest sprintf adapter needs C99 printf, which a MinGW on msvcrt.dll
+# lacks. llvm-mingw targets Windows 7 by default; the port needs Windows 10.
 if(MINGW)
-    add_compile_definitions(__USE_MINGW_ANSI_STDIO=1)
+    add_compile_definitions(__USE_MINGW_ANSI_STDIO=1 _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    # Link libc++ and libunwind in so the runner needs no toolchain DLLs.
+    add_link_options(-static)
 endif()
 
 if(NOT WIN32)

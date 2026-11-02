@@ -118,9 +118,9 @@ The manifest is computed the way doaxbv-re's `build_game.py` does it: one
 `recomp_funcs.h`, hashed with SHA-256.
 
 ```powershell
-# w64devkit's bin on PATH; tools/build_game.py downloads it to private/.
-cmake -S recomp-runtime -B build/recomp-program -G Ninja -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ `
+# llvm-mingw's and CMake's bin on PATH; tools/build_game.py downloads them to private/.
+cmake -S recomp-runtime -B build/recomp-program -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
   -DRECOMP_PROGRAM_DIR=private/lift-init2/generated `
   -DRECOMP_PROGRAM_MANIFEST_SHA256=<manifest sha256> `
   -DRECOMP_PROGRAM_EBP_EXPECTED=0

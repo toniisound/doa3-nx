@@ -118,18 +118,18 @@ The runtime tests build without any game files or submodules:
 ```powershell
 git clone https://github.com/NoRain211/doa3-re.git
 cd doa3-re
-# Windows: put w64devkit on PATH, downloading it into private/ the first time.
-$env:PATH = (python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(build_game.w64devkit())" | Select-Object -Last 1) + ";$env:PATH"
-cmake -S recomp-runtime -B build/recomp-runtime -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+# Windows: put llvm-mingw and CMake on PATH, downloading them into private/ the first time.
+$env:PATH = (python -c "import os, sys; sys.path.insert(0, 'tools'); import build_game; print(os.pathsep.join(map(str, build_game.windows_tools())))" | Select-Object -Last 1) + ";$env:PATH"
+cmake -S recomp-runtime -B build/recomp-runtime -G "MinGW Makefiles" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 cmake --build build/recomp-runtime
 ctest --test-dir build/recomp-runtime --output-on-failure
 ```
 
-The `$env:PATH` line uses the [w64devkit](https://github.com/skeeto/w64devkit)
-GCC, CMake and Ninja that `tools/build_game.py` pins; skip it on macOS and
-Linux, or on Windows with another MinGW-w64 GCC on PATH. Visual Studio 2022
-also works: configure with `-G "Visual Studio 17 2022"` and pass
-`--config Release` to the build and `-C Release` to `ctest`.
+The `$env:PATH` line uses the [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
+Clang and `mingw32-make` and the CMake that `tools/build_game.py` pins; on
+macOS and Linux skip it and use `-G Ninja` without the compiler options.
+Visual Studio 2022 also works: configure with `-G "Visual Studio 17 2022"`
+and pass `--config Release` to the build and `-C Release` to `ctest`.
 
 This produces test executables, not the game runner. Passing tests does not
 establish game accuracy.
@@ -159,8 +159,8 @@ plays with the resolution, anti-aliasing, widescreen and volume you pick; see
 the game with those settings. In a checkout,
 `python tools/package_test.py --launchers .` builds both exes. On Windows the build needs
 only Python 3.12+; its first run downloads
-[w64devkit](https://github.com/skeeto/w64devkit) (GCC, CMake and Ninja;
-69 MB, about 720 MB unpacked) into `private/`.
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Clang and make) and
+CMake (245 MB, about 850 MB unpacked) into `private/`.
 On macOS and Linux, extract the release's
 `DOA3-<version>-macOS.tar.gz` or `DOA3-<version>-Linux.tar.gz` and run
 `./build_game.sh` with your ISO, then `./launcher.sh` or `./run_game.sh`; see
