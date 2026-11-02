@@ -32,6 +32,13 @@ Disassembly takes every code section (no `--text-only`), because D3D, DSOUND and
 XPP code lives outside `.text`. No recipe, recoveries, func_id or ABI input
 were used; the empty paths keep stale lifter output out.
 
+`tools/build_game.py` skips the disassembly: it lifts from the recipe's stored
+`functions.json.gz` (`tools/doa3`, `tools/doa3-jp`) with no labels, which gives
+the same program. When the lifter pin or a seed list changes, disassemble as
+above and store the new list with
+`python -c "import gzip,sys; open(sys.argv[2],'wb').write(gzip.compress(open(sys.argv[1],'rb').read(),9,mtime=0))" <functions.json> tools/doa3/functions.json.gz`,
+then update its hash in `public-export.json`.
+
 | Result | Value |
 |---|---|
 | Functions | 7,099 from disassembly, 7,146 after callback recovery and manual-entry handling |

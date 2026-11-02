@@ -63,8 +63,10 @@
     "docs/doa3-jp-test.md",
     "tools/doa3/manual_functions.json",
     "tools/doa3/seed_functions.json",
+    "tools/doa3/functions.json.gz",
     "tools/doa3-jp/manual_functions.json",
     "tools/doa3-jp/seed_functions.json",
+    "tools/doa3-jp/functions.json.gz",
     "recipes/doaxbv-suits.pack.gz"
   ],
   "quarantine": [
@@ -143,6 +145,16 @@
       "path": "recipes/doaxbv-suits.pack.gz",
       "sha256": "5d17ae9b4bbed3fadb07a1bbb2c98fd0161d06b268006dc1e2cdee87b965adca",
       "reason": "DOAXBV swimsuit recipes (gzip): disc offsets, assembly steps, bone, weld and material numbers and suit names, replayed against the player's own DOAXBV disc. No game asset bytes. Update the hash with the file."
+    },
+    {
+      "path": "tools/doa3/functions.json.gz",
+      "sha256": "4c3e0c7717e28e7e632e3094fc9a95a1de9bfb3a1c65276e46d6daa94bde36f8",
+      "reason": "The lifter's USA 3.0 function list (gzip): addresses, sizes, instruction counts, callers and sub_ names from tools.disasm, so builds skip disassembly. No instruction bytes or game text. Update the hash with the file."
+    },
+    {
+      "path": "tools/doa3-jp/functions.json.gz",
+      "sha256": "c9afeb0992e1d195b600ab60e9ee3f68fb83f4a016efe6407473e7c5bca7fd13",
+      "reason": "The same function list for Japan 3.1. Update the hash with the file."
     },
     {
       "path": "tools/launcher-background.jpg",
