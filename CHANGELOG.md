@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6 — 2026-11-02
+
+Native 16:10 and ultrawide screens, and fullscreen that covers any screen.
+
+### Added
+
+- **16:10 and ultrawide screens** (#45). The launcher's Screen setting adds
+  16:10 and Ultrawide (the primary monitor's own shape, such as 21:9 or 32:9,
+  up to 4:1; 21:9 on a narrower monitor), which the game renders natively:
+  its projection and fight camera take the shape, the HUD and menus keep
+  their 4:3 shape, and movies keep the film's shape. Wider than 16:9, the
+  fight camera keeps its 16:9 framing and the view widens around it.
+
+### Fixed
+
+- **Fullscreen on other screen shapes** (#45). On Windows above 480p, the
+  game window covers the whole screen instead of leaving the desktop showing
+  below or beside it. A screen of another shape than the chosen one gets
+  black bars.
+- **Japan 3.1 movies in widescreen** keep the film's shape instead of
+  stretching.
+
 ## 0.5 — 2026-11-01
 
 Windows builds without Visual Studio, and one beach launcher on every
@@ -31,13 +53,6 @@ platform.
 - **First build stopping with "Access is denied".** When antivirus is still
   scanning the new disc links or the extracted disc, the build waits up to 30
   seconds for the folder to unlock instead of failing on `play-disc.tmp`.
-- **Fullscreen on 16:10 and other screen shapes** (#45). Above 480p the game
-  window covers the whole screen instead of leaving the desktop showing below
-  or beside it. The launcher's Screen setting adds 16:10 and Ultrawide (the
-  monitor's own shape, such as 21:9 or 32:9), which the game renders
-  natively: its projection and fight camera take the shape, the HUD and menus
-  keep their 4:3 shape, and movies keep the film's shape. A screen of another
-  shape gets black bars.
 
 ## 0.4 — 2026-10-27
 
