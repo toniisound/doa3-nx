@@ -1850,6 +1850,34 @@ static bool testWidescreen2dSqueeze()
         !squeezeWidescreen2d(90.0f, 630.0f, 720.0f);
 }
 
+static bool sameScale(const Widescreen2dScale &scale, float x, float y)
+{
+    return std::fabs(scale.x - x) < 1e-4f && std::fabs(scale.y - y) < 1e-4f;
+}
+
+static bool testWidescreen2dScale()
+{
+    RecompD3dPresenter presenter{};
+    presenter.config.width = 720u;
+    presenter.config.height = 480u;
+    presenter.aspect_w = 16u;
+    presenter.aspect_h = 10u;
+    // 16:10: the HUD narrows to 5/6, 4:3 film widens to keep its shape,
+    // zoomed 16:9 film letterboxes, and a fade is left alone.
+    if (!sameScale(widescreen2dScale(&presenter, 200.0f, 300.0f, 10.0f, 40.0f), 5.0f / 6.0f, 1.0f) ||
+        !sameScale(widescreen2dScale(&presenter, 90.0f, 630.0f, 0.0f, 480.0f), 10.0f / 9.0f, 1.0f) ||
+        !sameScale(widescreen2dScale(&presenter, 0.0f, 720.0f, -80.0f, 560.0f), 1.0f, 0.9f) ||
+        !sameScale(widescreen2dScale(&presenter, 0.0f, 720.0f, 0.0f, 480.0f), 1.0f, 1.0f)) {
+        return false;
+    }
+    // 21:9 (2560x1080): everything narrows, and zoomed film pillarboxes.
+    presenter.aspect_w = 64u;
+    presenter.aspect_h = 27u;
+    return sameScale(widescreen2dScale(&presenter, 200.0f, 300.0f, 10.0f, 40.0f), 0.5625f, 1.0f) &&
+        sameScale(widescreen2dScale(&presenter, 90.0f, 630.0f, 0.0f, 480.0f), 0.75f, 1.0f) &&
+        sameScale(widescreen2dScale(&presenter, 0.0f, 720.0f, -80.0f, 560.0f), 0.75f, 1.0f);
+}
+
 static bool testTargetLifetimes(
     RecompD3dPresenter *presenter, ID3D11Texture2D *readback)
 {
@@ -2518,6 +2546,10 @@ int main()
     }
     if (!testWidescreen2dSqueeze()) {
         std::fprintf(stderr, "FAIL widescreen 2D squeeze\n");
+        return 1;
+    }
+    if (!testWidescreen2dScale()) {
+        std::fprintf(stderr, "FAIL widescreen 2D scale\n");
         return 1;
     }
     FrameRateCounter counter;

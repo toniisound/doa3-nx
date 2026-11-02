@@ -15,7 +15,7 @@ them.
 | `RECOMP_D3D_SCALE` | Render height multiplier, clamped to 1-8. 3 renders 1440 lines natively. The launcher sets height / 480. Above 1, a borderless window covers the primary screen and the game keeps its shape inside it, with black bars on a screen of another shape. |
 | `RECOMP_D3D_MSAA` | MSAA sample count, clamped to 1-32. The GPU must support the count. |
 | `RECOMP_D3D_SMAA` | Any value except `0` enables SMAA. Direct3D 11 only. |
-| `RECOMP_D3D_WIDESCREEN` | Any value except `0` reports the dashboard's 16:9 setting to the game and shows it at 16:9. The 3D view widens; the HUD and menus keep their 4:3 shape in the center. `16:10`, or another `W:H` between 4:3 and 16:9, renders that shape instead. |
+| `RECOMP_D3D_WIDESCREEN` | Any value except `0` reports the dashboard's 16:9 setting to the game and shows it at 16:9. The 3D view widens; the HUD and menus keep their 4:3 shape in the center. `16:10`, `64:27` (2560x1080) or another `W:H` from 4:3 to 4:1 renders that shape instead. |
 | `RECOMP_FREE_CAMERA` | `1` lets F1, `` ` `` or the right stick's click take the camera and fly it ([Free camera](free-camera.md)); its other options are listed there. |
 | `RECOMP_AUDIO_GAIN` | Master gain from 0 to 1, default 1. 0 or an invalid value mutes output. |
 | `RECOMP_D3D_FOG` | `0` disables the host table-fog model, for before/after comparisons. |

@@ -325,11 +325,10 @@ void onPresent(std::uint32_t swap)
 
 #if defined(RECOMP_FULL_PROGRAM) && !defined(RECOMP_DOAXBV_BINDINGS)
 /* DOA3's widescreen mode holds 16:9 in data: its projection (9/16 height over
-   width), the fight camera's framing (16/9) and field of view, and the movie
-   quad that pillarboxes 4:3 film (540 of 720 wide, height 480/540 of that).
-   Another screen shape, such as 16:10, rewrites them so the game itself
-   renders that shape. Japan shares its movie width with timing code, so
-   Japan movies keep their 16:9 quad. */
+   width) and the fight camera's framing (16/9) and field of view. Another
+   screen shape rewrites them so the game itself renders that shape. Wider
+   than 16:9, the camera keeps its 16:9 framing and the view widens around
+   it. The presenters fit the 2D layer and movies to the same shape. */
 void setDoa3WidescreenShape(float aspect)
 {
     const auto read = [](std::uint32_t address) {
@@ -341,17 +340,13 @@ void setDoa3WidescreenShape(float aspect)
         std::memcpy(recomp_memory(address, sizeof value), &value, sizeof value);
     };
     write(DOA3(0x001ed764u, 0x00251620u), 1.0f / aspect);
-    write(DOA3(0x001ed7c8u, 0x00251618u), aspect);
+    const float framing = (std::min)(aspect, 16.0f / 9.0f);
+    write(DOA3(0x001ed7c8u, 0x00251618u), framing);
     // The field of view narrows from 4:3 to 16:9; other shapes fall between.
     const float fov_4x3 = read(DOA3(0x001ed858u, 0x00251a70u));
     const float fov_16x9 = read(DOA3(0x001ed85cu, 0x00251a74u));
-    const float wide = (aspect - 4.0f / 3.0f) / (16.0f / 9.0f - 4.0f / 3.0f);
+    const float wide = (framing - 4.0f / 3.0f) / (16.0f / 9.0f - 4.0f / 3.0f);
     write(DOA3(0x001ed85cu, 0x00251a74u), fov_4x3 + (fov_16x9 - fov_4x3) * wide);
-#ifndef RECOMP_DOA3_JP_BINDINGS
-    const float movie_width = 720.0f * (4.0f / 3.0f) / aspect;
-    write(0x00202f3cu, movie_width);
-    write(0x00202f34u, 480.0f / movie_width);
-#endif
 }
 #endif
 

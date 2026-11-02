@@ -28,7 +28,7 @@ constexpr float kInfoY = 262, kLabelY = 296, kValueY = 310, kValueH = 16, kTabY 
 
 const int kHeights[] = {480, 720, 1080, 1440, 2160};
 const int kSamples[] = {1, 2, 4, 8};
-const char *const kScreens[] = {"4:3", "16:9", "16:10"};
+const char *const kScreens[] = {"4:3", "16:9", "16:10", "ULTRAWIDE"};
 const int kVolumes[] = {100, 75, 50, 25, 0};
 
 enum Item { RESOLUTION, MSAA, VOLUME, WIDESCREEN, FREE_CAMERA, SWIMSUITS, START_FAVORITE, ITEM_COUNT };
@@ -358,7 +358,7 @@ int main(int argc, char **argv)
     launcher.choice[RESOLUTION] = std::max(0, nearest);
     launcher.choice[MSAA] = indexOf(kSamples, settings.msaa, 0);
     launcher.choice[VOLUME] = indexOf(kVolumes, settings.volume, 0);
-    launcher.choice[WIDESCREEN] = 0;
+    launcher.choice[WIDESCREEN] = 3; // a saved ultrawide "W:H"
     for (int i = 0; i < static_cast<int>(std::size(kScreens)); ++i) {
         if (settings.screen == kScreens[i]) launcher.choice[WIDESCREEN] = i;
     }
@@ -453,6 +453,12 @@ int main(int argc, char **argv)
         settings.msaa = kSamples[launcher.choice[MSAA]];
         settings.volume = kVolumes[launcher.choice[VOLUME]];
         settings.screen = kScreens[launcher.choice[WIDESCREEN]];
+        if (launcher.choice[WIDESCREEN] == 3) {
+            // The primary screen's own shape when it is wider than 16:9, else 21:9 (2560x1080).
+            const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+            settings.screen = mode != nullptr && mode->w * 9 > mode->h * 16
+                ? std::to_string(mode->w) + ":" + std::to_string(mode->h) : "64:27";
+        }
         settings.free_camera = launcher.choice[FREE_CAMERA] != 0;
         settings.swimsuits = launcher.choice[SWIMSUITS] != 0;
         settings.start_favorite = launcher.choice[START_FAVORITE] != 0;

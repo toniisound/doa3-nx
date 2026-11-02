@@ -183,11 +183,15 @@ narrows screen-space quads that are narrower than the centered 4:3 area by
 full-screen fades, backdrops and the already pillarboxed movies are left as
 drawn.
 
-`RECOMP_D3D_WIDESCREEN=16:10` (the launcher's 16:10 screen) makes the game
-render 16:10 itself: the runner rewrites the 16:9 constants of its
-projection, fight camera and USA movie quad, and the presenter narrows the
-2D layer by 5/6 instead of 3/4. Japan 3.1 movies keep their 16:9 quad,
-because that version shares the constant with timing code.
+`RECOMP_D3D_WIDESCREEN=16:10`, or any `W:H` from 4:3 to 4:1 such as an
+ultrawide monitor's `3440:1440`, makes the game render that shape itself:
+the runner rewrites the 16:9 constants of its projection and fight camera,
+and the presenter narrows the 2D layer to 4:3 of the shape. Wider than 16:9,
+the fight camera keeps its 16:9 framing and the view widens around it.
+Movies come in a centered 4:3 frame the game sized for 16:9; the presenter
+keeps the film's shape, letterboxing 16:9 endings on 16:10 and pillarboxing
+them on ultrawide. The launcher's Ultrawide screen uses the primary
+monitor's own shape.
 
 ## Repository layout
 

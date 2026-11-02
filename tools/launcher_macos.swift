@@ -14,7 +14,7 @@ let settingsURL = root.appendingPathComponent("private/launcher.json")
 
 let heights = [480, 720, 1080, 1440, 2160]
 let samples = [1, 2, 4, 8]
-let screens = ["4:3", "16:9", "16:10"]
+let screens = ["4:3", "16:9", "16:10", "Ultrawide"]
 let volumes = [100, 75, 50, 25, 0]
 // The swimsuit switch builds DOAXBV swimsuits from the player's own DOAXBV
 // disc: an .iso image or the extracted folder, remembered in
@@ -34,9 +34,17 @@ func intSetting(_ key: String, _ fallback: Int) -> Int {
 func boolSetting(_ key: String, _ fallback: Bool = false) -> Bool {
     (settings[key] as? NSNumber)?.boolValue ?? fallback
 }
-// Settings saved before 16:10 hold a widescreen flag.
+// "4:3", "16:9", "16:10" or an ultrawide "W:H"; settings saved before 16:10
+// hold a widescreen flag.
 func screenSetting() -> String {
     settings["screen"] as? String ?? (boolSetting("widescreen") ? "16:9" : "4:3")
+}
+// The main screen's own shape when it is wider than 16:9, else 21:9 (2560x1080).
+func ultrawideShape() -> String {
+    guard let screen = NSScreen.screens.first else { return "64:27" }
+    let w = Int(screen.frame.width * screen.backingScaleFactor)
+    let h = Int(screen.frame.height * screen.backingScaleFactor)
+    return w * 9 > h * 16 ? "\(w):\(h)" : "64:27"
 }
 let screenHeight: Int = {
     guard let screen = NSScreen.screens.first ?? NSScreen.main else { return 1080 }
@@ -73,7 +81,7 @@ final class LauncherView: NSView {
     let msaa = Row("MSAA", "Smooths polygon edges with multisampling", samples.map { $0 == 1 ? "Off" : "\($0)x" },
                    samples.firstIndex(of: intSetting("msaa", 1)) ?? 0)
     let screen = Row("Screen", "Wider 3D view. The HUD and menus stay 4:3", screens,
-                     screens.firstIndex(of: screenSetting()) ?? 0)
+                     screens.firstIndex(of: screenSetting()) ?? 3)
     let volume = Row("Volume", "Sets the master volume", volumes.map { $0 == 0 ? "Mute" : "\($0)%" },
                      volumes.firstIndex(of: intSetting("volume", 100)) ?? 0)
     let freeCamera = Row("Free Camera", "F1, \u{60} or a right-stick click flies the camera; P freezes the game",
@@ -143,7 +151,7 @@ final class LauncherView: NSView {
             "msaa": samples[msaa.index],
             "smaa": false,
             "volume": volumes[volume.index],
-            "screen": screens[screen.index],
+            "screen": screen.index == 3 ? ultrawideShape() : screens[screen.index],
             "free_camera": freeCamera.index == 1,
         ]
     }

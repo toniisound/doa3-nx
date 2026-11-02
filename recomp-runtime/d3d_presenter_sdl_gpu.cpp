@@ -460,16 +460,30 @@ inline uint32_t mainWidth(const RecompD3dPresenter *p) {
 
 /* As in the D3D11 presenter: DOA3 widens only its 3D view and movies at
    16:9, while HUD, menu and subtitle quads keep 4:3 positions. A screen-space
-   quad narrower than the centered 4:3 window is that 2D layer and is narrowed
-   by widescreen2dScale about the screen center; full-width fades and
-   backdrops are kept. */
+   quad narrower than the centered 4:3 window is that 2D layer. */
 inline bool squeezeWidescreen2d(float left, float right, float width) {
     return left > width / 8.0f + 1.0f || right < width * 7.0f / 8.0f - 1.0f;
 }
 
-// 4:3 over the widescreen shape: 3/4 at 16:9, 5/6 at 16:10.
-inline float widescreen2dScale(const RecompD3dPresenter *p) {
-    return 4.0f * p->aspect_h / (3.0f * p->aspect_w);
+struct Widescreen2dScale {
+    float x = 1.0f, y = 1.0f;
+};
+
+/* As in the D3D11 presenter: the 4:3 2D layer narrows to 4:3 of the screen's
+   shape, and a movie's centered 4:3 frame sized for 16:9 keeps its shape (the
+   taller zoomed frame shrinks to full width below 16:9). */
+inline Widescreen2dScale widescreen2dScale(const RecompD3dPresenter *p,
+    float left, float right, float top, float bottom) {
+    const float width = static_cast<float>(p->config.width);
+    const float height = static_cast<float>(p->config.height);
+    const float wide = 16.0f * p->aspect_h / (9.0f * p->aspect_w);
+    const float frame = 0.75f * width / height;
+    if (std::fabs(left + right - width) <= 2.0f && bottom - top >= height - 2.0f &&
+        std::fabs(right - left - frame * (bottom - top)) <= 0.01f * (right - left)) {
+        return bottom - top > height + 2.0f && wide > 1.0f
+            ? Widescreen2dScale{1.0f, 1.0f / wide} : Widescreen2dScale{wide, 1.0f};
+    }
+    return {squeezeWidescreen2d(left, right, width) ? 0.75f * wide : 1.0f, 1.0f};
 }
 
 namespace {
@@ -3110,21 +3124,22 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
             constants[14] = 0.0f;
             constants[15] = 1.0f;
             if (presenter->widescreen && !draw.program_count && !draw.target.offscreen) {
-                float left = INFINITY, right = -INFINITY;
+                float left = INFINITY, right = -INFINITY, top = INFINITY, bottom = -INFINITY;
                 for (uint32_t i = 0u; i < draw.vertex_count; ++i) {
-                    float x;
-                    std::memcpy(&x, static_cast<const uint8_t *>(draw.vertex_bytes) +
-                        i * draw.vertex_stride, sizeof x);
-                    if (!std::isfinite(x)) continue;
-                    left = std::min(left, x);
-                    right = std::max(right, x);
+                    float xy[2];
+                    std::memcpy(xy, static_cast<const uint8_t *>(draw.vertex_bytes) +
+                        i * draw.vertex_stride, sizeof xy);
+                    if (!std::isfinite(xy[0]) || !std::isfinite(xy[1])) continue;
+                    left = std::min(left, xy[0]);
+                    right = std::max(right, xy[0]);
+                    top = std::min(top, xy[1]);
+                    bottom = std::max(bottom, xy[1]);
                 }
-                const float width = static_cast<float>(presenter->config.width);
-                if (squeezeWidescreen2d(left, right, width)) {
-                    const float squeeze = widescreen2dScale(presenter);
-                    constants[12] += constants[0] * 0.5f * (1.0f - squeeze) * width;
-                    constants[0] *= squeeze;
-                }
+                const auto scale = widescreen2dScale(presenter, left, right, top, bottom);
+                constants[12] += constants[0] * 0.5f * (1.0f - scale.x) * presenter->config.width;
+                constants[0] *= scale.x;
+                constants[13] += constants[5] * 0.5f * (1.0f - scale.y) * presenter->config.height;
+                constants[5] *= scale.y;
             }
         }
 
@@ -3276,9 +3291,10 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
             /* The portrait sits in a 2D frame that widescreen narrows to 4:3, so
                its viewport narrows the same way about the screen center. */
             const float width = static_cast<float>(presenter->config.width);
-            if (presenter->widescreen && !draw.target.offscreen &&
-                squeezeWidescreen2d(draw.viewport[0], draw.viewport[0] + draw.viewport[2], width)) {
-                const float squeeze = widescreen2dScale(presenter);
+            if (presenter->widescreen && !draw.target.offscreen) {
+                const float squeeze = widescreen2dScale(presenter, draw.viewport[0],
+                    draw.viewport[0] + draw.viewport[2], draw.viewport[1],
+                    draw.viewport[1] + draw.viewport[3]).x;
                 q.viewport.x = (squeeze * draw.viewport[0] + 0.5f * (1.0f - squeeze) * width) * scale_x;
                 q.viewport.w *= squeeze;
             }
