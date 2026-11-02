@@ -110,6 +110,27 @@ class PlayDiscTests(unittest.TestCase):
                 patch("sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=EOFError):
             self.assertTrue(build_game.ask_movies(None))
 
+    def test_locked_play_disc_rename_is_retried(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
+                patch.object(build_game.time, "sleep") as sleep:
+            disc = Path(folder) / "disc"
+            disc.mkdir()
+            (disc / "default.xbe").write_bytes(b"xbe")
+            rename = Path.rename
+            calls = []
+
+            def locked_once(self, target):
+                calls.append(self)
+                if len(calls) == 1:
+                    raise PermissionError("scanning")
+                return rename(self, target)
+
+            with patch.object(Path, "rename", locked_once):
+                prepare_play_disc(disc, movies=True)
+            self.assertEqual(len(calls), 2)
+            sleep.assert_called_once()
+            self.assertEqual((Path(folder) / "private" / "play-disc" / "default.xbe").read_bytes(), b"xbe")
+
 
 class WindowsToolsTests(unittest.TestCase):
     def test_download_is_verified_and_unpacked_once(self):
