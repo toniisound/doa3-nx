@@ -118,15 +118,17 @@ The runtime tests build without any game files or submodules:
 ```powershell
 git clone https://github.com/NoRain211/doa3-re.git
 cd doa3-re
+# Windows: put w64devkit on PATH, downloading it into private/ the first time.
+$env:PATH = (python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(build_game.w64devkit())" | Select-Object -Last 1) + ";$env:PATH"
 cmake -S recomp-runtime -B build/recomp-runtime -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
 cmake --build build/recomp-runtime
 ctest --test-dir build/recomp-runtime --output-on-failure
 ```
 
-On Windows these need a MinGW-w64 GCC, CMake and Ninja on PATH, such as the
-[w64devkit](https://github.com/skeeto/w64devkit) that `tools/build_game.py`
-downloads to `private/w64devkit-<version>` on its first build. Visual Studio
-2022 also works: configure with `-G "Visual Studio 17 2022"` and pass
+The `$env:PATH` line uses the [w64devkit](https://github.com/skeeto/w64devkit)
+GCC, CMake and Ninja that `tools/build_game.py` pins; skip it on macOS and
+Linux, or on Windows with another MinGW-w64 GCC on PATH. Visual Studio 2022
+also works: configure with `-G "Visual Studio 17 2022"` and pass
 `--config Release` to the build and `-C Release` to `ctest`.
 
 This produces test executables, not the game runner. Passing tests does not

@@ -10,7 +10,8 @@
   first run instead of installing the Visual Studio 2022 Build Tools, so
   Python is the only thing to install. CMake is no longer needed either.
   The runner moves to `build/recomp-program/recomp_program_runner.exe`;
-  rebuild once after updating. Visual Studio 2022 still builds the runtime.
+  rebuild once after updating. Visual Studio 2022 remains an optional way to
+  build the runtime and its tests.
 - **Beach launcher.** The Windows, Linux and macOS launchers share one look:
   a sunset beach between letterbox bars, with page tabs and the chosen page's
   settings side by side in the bottom bar. Left and right move between pages

@@ -153,7 +153,9 @@ void remove_tree(const fs::path &path)
             if (writable == 0u) writable = FILE_ATTRIBUTE_NORMAL;
             require(SetFileAttributesW(entry.c_str(), writable) != 0);
         }
-        require((directory ? RemoveDirectoryW(entry.c_str()) : DeleteFileW(entry.c_str())) != 0);
+        if ((directory ? RemoveDirectoryW(entry.c_str()) : DeleteFileW(entry.c_str())) == 0)
+            throw fs::filesystem_error("delete save tree entry", entry,
+                std::error_code(static_cast<int>(GetLastError()), std::system_category()));
     };
     if (exists_plain(path)) remove_entry(remove_entry, path);
 #else

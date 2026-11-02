@@ -318,14 +318,10 @@ add_executable(recomp_runtime_test
 target_include_directories(recomp_runtime_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
-    # custom_music.cpp loads Media Foundation at run time: Windows N editions and
-    # Server without the Media Foundation feature lack it. Only its test calls
-    # it directly; MSVC delay-loads the test's imports so it can skip there.
-    target_link_libraries(recomp_runtime_test PRIVATE mfplat mfreadwrite mfuuid ole32)
+    # custom_music.cpp and its test load Media Foundation at run time: Windows N
+    # editions and Server without the Media Foundation feature lack it.
+    target_link_libraries(recomp_runtime_test PRIVATE mfuuid ole32)
     if(MSVC)
-        target_link_libraries(recomp_runtime_test PRIVATE delayimp)
-        target_link_options(recomp_runtime_test PRIVATE
-            /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll)
         set(RECOMP_XAUDIO2 xaudio2)
     else()
         # MinGW names the XAudio2 2.9 import library after its DLL.

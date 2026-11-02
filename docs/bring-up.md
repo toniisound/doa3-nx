@@ -119,7 +119,7 @@ The manifest is computed the way doaxbv-re's `build_game.py` does it: one
 
 ```powershell
 # w64devkit's bin on PATH; tools/build_game.py downloads it to private/.
-cmake -S recomp-runtime -B build/recomp-program -G Ninja -DCMAKE_BUILD_TYPE=Debug `
+cmake -S recomp-runtime -B build/recomp-program -G Ninja -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ `
   -DRECOMP_PROGRAM_DIR=private/lift-init2/generated `
   -DRECOMP_PROGRAM_MANIFEST_SHA256=<manifest sha256> `
