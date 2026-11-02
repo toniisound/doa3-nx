@@ -8,10 +8,11 @@ platform.
 ### Changed
 
 - **Windows builds without Visual Studio.** The build downloads the pinned
-  [w64devkit](https://github.com/skeeto/w64devkit) 2.11.0 (GCC 16.2, CMake
-  and Ninja; 69 MB, checked against its SHA-256) into `private/` on its
-  first run instead of installing the Visual Studio 2022 Build Tools, so
-  Python is the only thing to install. CMake is no longer needed either.
+  [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20261006 (Clang 23,
+  the same compiler as the DOAXBV and DOA2U ports) and CMake 4.4.5 (245 MB,
+  each checked against its SHA-256) into `private/` on its first run instead
+  of installing the Visual Studio 2022 Build Tools, so Python is the only
+  thing to install. The first 0.5 upload used w64devkit's GCC instead.
   The runner moves to `build/recomp-program/recomp_program_runner.exe`;
   rebuild once after updating. Visual Studio 2022 remains an optional way to
   build the runtime and its tests.
