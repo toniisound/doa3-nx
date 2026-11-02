@@ -6,6 +6,7 @@ extern "C" {
 #include "program_manual.h"
 #include "doa3_build.h"
 }
+#include "widescreen.h"
 #include "xapi_time_adapter.h"
 #include "audio_output.h"
 #include "custom_music.h"
@@ -321,6 +322,33 @@ void onPresent(std::uint32_t swap)
     ++inputFrame;
     recomp_input_adapter_next_frame();
 }
+
+#if defined(RECOMP_FULL_PROGRAM) && !defined(RECOMP_DOAXBV_BINDINGS)
+/* DOA3's widescreen mode holds 16:9 in data: its projection (9/16 height over
+   width) and the fight camera's framing (16/9) and field of view. Another
+   screen shape rewrites them so the game itself renders that shape. Wider
+   than 16:9, the camera keeps its 16:9 framing and the view widens around
+   it. The presenters fit the 2D layer and movies to the same shape. */
+void setDoa3WidescreenShape(float aspect)
+{
+    const auto read = [](std::uint32_t address) {
+        float value;
+        std::memcpy(&value, recomp_memory(address, sizeof value), sizeof value);
+        return value;
+    };
+    const auto write = [](std::uint32_t address, float value) {
+        std::memcpy(recomp_memory(address, sizeof value), &value, sizeof value);
+    };
+    write(DOA3(0x001ed764u, 0x00251620u), 1.0f / aspect);
+    const float framing = (std::min)(aspect, 16.0f / 9.0f);
+    write(DOA3(0x001ed7c8u, 0x00251618u), framing);
+    // The field of view narrows from 4:3 to 16:9; other shapes fall between.
+    const float fov_4x3 = read(DOA3(0x001ed858u, 0x00251a70u));
+    const float fov_16x9 = read(DOA3(0x001ed85cu, 0x00251a74u));
+    const float wide = (framing - 4.0f / 3.0f) / (16.0f / 9.0f - 4.0f / 3.0f);
+    write(DOA3(0x001ed85cu, 0x00251a74u), fov_4x3 + (fov_16x9 - fov_4x3) * wide);
+}
+#endif
 
 /* True when path names the same existing file as one of others, so writing
    it would overwrite a file this run reads or writes. */
@@ -1029,6 +1057,10 @@ std::vector<AnalogPulse> inputAnalogPulses;
     /* DOA3 reads the stick only with Analog Button on, but its options
        defaults table turns it off; default it on. Saves keep their choice. */
     *recomp_memory(DOA3(0x0021b4fbu, 0x003f4563u), 1u) = 1u;
+    unsigned aspect_w = 0u, aspect_h = 0u;
+    if (recomp_widescreen(&aspect_w, &aspect_h)) {
+        setDoa3WidescreenShape(static_cast<float>(aspect_w) / aspect_h);
+    }
 #endif
     /* The guest Swap seam paces updates independently of the host
        monitor. --vsync additionally synchronizes presentation to scanout. */

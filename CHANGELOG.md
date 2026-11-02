@@ -31,6 +31,13 @@ platform.
 - **First build stopping with "Access is denied".** When antivirus is still
   scanning the new disc links or the extracted disc, the build waits up to 30
   seconds for the folder to unlock instead of failing on `play-disc.tmp`.
+- **Fullscreen on 16:10 and other screen shapes** (#45). Above 480p the game
+  window covers the whole screen instead of leaving the desktop showing below
+  or beside it. The launcher's Screen setting adds 16:10 and Ultrawide (the
+  monitor's own shape, such as 21:9 or 32:9), which the game renders
+  natively: its projection and fight camera take the shape, the HUD and menus
+  keep their 4:3 shape, and movies keep the film's shape. A screen of another
+  shape gets black bars.
 
 ## 0.4 — 2026-10-27
 
