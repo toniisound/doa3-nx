@@ -59,11 +59,11 @@ def use_windows_newlines(generated):
 
 def rename_retrying(source, target):
     """Antivirus scans of freshly written files can briefly lock a folder against renaming."""
-    for attempt in range(30):
+    for attempt in range(31):  # 30 one-second waits
         try:
             return source.rename(target)
         except PermissionError:
-            if attempt == 29:
+            if attempt == 30:
                 raise
             time.sleep(1)
 
