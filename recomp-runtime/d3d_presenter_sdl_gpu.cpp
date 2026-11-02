@@ -2860,6 +2860,11 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
                 if (dst_aspect > src_aspect) {
                     dst_w = static_cast<int>(swap_h * src_aspect + 0.5f);
                     dst_x = (swap_w - dst_w) / 2;
+                } else if (presenter->widescreen && swap_w * 3u >= swap_h * 4u) {
+                    /* As in the D3D11 presenter: 16:9 is Hor+ with its HUD in
+                       the center 4:3, so 16:10 trims the 3D view's sides. */
+                    blit.source.w = static_cast<Uint32>(blit.source.w * dst_aspect / src_aspect + 0.5f);
+                    blit.source.x = (mainWidth(presenter) - blit.source.w) / 2u;
                 } else {
                     dst_h = static_cast<int>(swap_w / src_aspect + 0.5f);
                     dst_y = (swap_h - dst_h) / 2;

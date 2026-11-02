@@ -606,12 +606,16 @@ bool scalesToWindow(const RecompD3dPresenter *presenter)
 }
 
 /* The largest display-aspect rectangle centered in the window; the rest of a
-   screen with another shape (16:10, 21:9) stays black. */
+   screen with another shape stays black. DOA3's 16:9 is Hor+ with its HUD in
+   the center 4:3, so on a screen between 4:3 and 16:9 (16:10) widescreen
+   fills the height and trims the sides of the 3D view instead. */
 D3D11_VIEWPORT fitViewport(const RecompD3dPresenter *presenter, UINT width, UINT height)
 {
     const UINT full_width = presentClientWidth(presenter, height);
-    const float w = static_cast<float>((std::min)(full_width, width));
-    const float h = full_width <= width ? static_cast<float>(height)
+    const bool full_height = full_width <= width ||
+        (presenter->widescreen && width * 3u >= height * 4u);
+    const float w = static_cast<float>(full_height ? full_width : width);
+    const float h = full_height ? static_cast<float>(height)
         : std::round(static_cast<float>(width) * height / full_width);
     return {std::floor((width - w) / 2.0f), std::floor((height - h) / 2.0f), w, h, 0.0f, 1.0f};
 }
