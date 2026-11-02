@@ -458,32 +458,11 @@ inline uint32_t mainWidth(const RecompD3dPresenter *p) {
         : presentClientWidth(p, mainHeight(p));
 }
 
-/* As in the D3D11 presenter: DOA3 widens only its 3D view and movies at
-   16:9, while HUD, menu and subtitle quads keep 4:3 positions. A screen-space
-   quad narrower than the centered 4:3 window is that 2D layer. */
-inline bool squeezeWidescreen2d(float left, float right, float width) {
-    return left > width / 8.0f + 1.0f || right < width * 7.0f / 8.0f - 1.0f;
-}
-
-struct Widescreen2dScale {
-    float x = 1.0f, y = 1.0f;
-};
-
-/* As in the D3D11 presenter: the 4:3 2D layer narrows to 4:3 of the screen's
-   shape, and a movie's centered 4:3 frame sized for 16:9 keeps its shape (the
-   taller zoomed frame shrinks to full width below 16:9). */
-inline Widescreen2dScale widescreen2dScale(const RecompD3dPresenter *p,
+inline RecompWidescreen2dScale widescreen2dScale(const RecompD3dPresenter *p,
     float left, float right, float top, float bottom) {
-    const float width = static_cast<float>(p->config.width);
-    const float height = static_cast<float>(p->config.height);
-    const float wide = 16.0f * p->aspect_h / (9.0f * p->aspect_w);
-    const float frame = 0.75f * width / height;
-    if (std::fabs(left + right - width) <= 2.0f && bottom - top >= height - 2.0f &&
-        std::fabs(right - left - frame * (bottom - top)) <= 0.01f * (right - left)) {
-        return bottom - top > height + 2.0f && wide > 1.0f
-            ? Widescreen2dScale{1.0f, 1.0f / wide} : Widescreen2dScale{wide, 1.0f};
-    }
-    return {squeezeWidescreen2d(left, right, width) ? 0.75f * wide : 1.0f, 1.0f};
+    return recomp_widescreen_2d_scale(static_cast<float>(p->config.width),
+        static_cast<float>(p->config.height), p->aspect_w, p->aspect_h,
+        left, right, top, bottom);
 }
 
 namespace {

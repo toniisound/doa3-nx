@@ -191,7 +191,8 @@ the fight camera keeps its 16:9 framing and the view widens around it.
 Movies come in a centered 4:3 frame the game sized for 16:9; the presenter
 keeps the film's shape, letterboxing 16:9 endings on 16:10 and pillarboxing
 them on ultrawide. The launcher's Ultrawide screen uses the primary
-monitor's own shape.
+monitor's own shape when it is wider than 16:9, up to 4:1, and 64:27
+(2560x1080) otherwise.
 
 ## Repository layout
 

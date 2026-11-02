@@ -556,38 +556,12 @@ uint32_t presentClientWidth(const RecompD3dPresenter *presenter, uint64_t height
         : (height * 4u + 1u) / 3u);
 }
 
-/* DOA3 widens only its 3D view and its movies at 16:9; HUD, menu and
-   subtitle quads keep 4:3 positions and would stretch by a third. A
-   screen-space quad narrower than the centered 4:3 window is that 2D layer. */
-bool squeezeWidescreen2d(float left, float right, float width)
-{
-    return left > width / 8.0f + 1.0f || right < width * 7.0f / 8.0f - 1.0f;
-}
-
-struct Widescreen2dScale {
-    float x = 1.0f, y = 1.0f;
-};
-
-/* How a widescreen screen-space quad scales about the screen center. The 4:3
-   2D layer narrows to 4:3 of the screen's shape (3/4 at 16:9, 5/6 at 16:10).
-   Movies arrive in a centered 4:3 frame the game sized for 16:9, at least as
-   tall as the screen: 540x480 guest pixels around 4:3 film, or a taller
-   zoomed frame around letterboxed 16:9 film. The frame keeps its shape at
-   full height, except that the zoomed frame shrinks to full width on a
-   screen narrower than 16:9. Fades and backdrops keep their geometry. */
-Widescreen2dScale widescreen2dScale(const RecompD3dPresenter *presenter,
+RecompWidescreen2dScale widescreen2dScale(const RecompD3dPresenter *presenter,
     float left, float right, float top, float bottom)
 {
-    const float width = static_cast<float>(presenter->config.width);
-    const float height = static_cast<float>(presenter->config.height);
-    const float wide = 16.0f * presenter->aspect_h / (9.0f * presenter->aspect_w);
-    const float frame = 0.75f * width / height; // a 4:3 frame in 16:9 guest units
-    if (std::fabs(left + right - width) <= 2.0f && bottom - top >= height - 2.0f &&
-        std::fabs(right - left - frame * (bottom - top)) <= 0.01f * (right - left)) {
-        return bottom - top > height + 2.0f && wide > 1.0f
-            ? Widescreen2dScale{1.0f, 1.0f / wide} : Widescreen2dScale{wide, 1.0f};
-    }
-    return {squeezeWidescreen2d(left, right, width) ? 0.75f * wide : 1.0f, 1.0f};
+    return recomp_widescreen_2d_scale(static_cast<float>(presenter->config.width),
+        static_cast<float>(presenter->config.height), presenter->aspect_w,
+        presenter->aspect_h, left, right, top, bottom);
 }
 
 /* A scaled main target renders at the display aspect, so the anamorphic guest

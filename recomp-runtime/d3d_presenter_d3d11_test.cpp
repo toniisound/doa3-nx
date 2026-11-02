@@ -1844,13 +1844,30 @@ static bool testWidescreen2dSqueeze()
 {
     /* Observed DOA3 quads at 720 wide and 16:9: subtitle glyph, watermark,
        full-screen flash, pillarboxed movie. */
-    return squeezeWidescreen2d(222.5f, 236.0f, 720.0f) &&
-        squeezeWidescreen2d(340.5f, 750.1f, 720.0f) &&
-        !squeezeWidescreen2d(0.5f, 720.5f, 720.0f) &&
-        !squeezeWidescreen2d(90.0f, 630.0f, 720.0f);
+    return recomp_squeeze_widescreen_2d(222.5f, 236.0f, 720.0f) &&
+        recomp_squeeze_widescreen_2d(340.5f, 750.1f, 720.0f) &&
+        !recomp_squeeze_widescreen_2d(0.5f, 720.5f, 720.0f) &&
+        !recomp_squeeze_widescreen_2d(90.0f, 630.0f, 720.0f);
 }
 
-static bool sameScale(const Widescreen2dScale &scale, float x, float y)
+static bool widescreenShape(const char *value, unsigned w, unsigned h)
+{
+    unsigned aspect_w = 0u, aspect_h = 0u;
+    _putenv_s("RECOMP_D3D_WIDESCREEN", value);
+    const bool wide = recomp_widescreen(&aspect_w, &aspect_h);
+    _putenv_s("RECOMP_D3D_WIDESCREEN", "");
+    return wide && aspect_w == w && aspect_h == h;
+}
+
+static bool testWidescreenShape()
+{
+    // A shape from 4:3 to 4:1 is kept; anything else falls back to 16:9.
+    return widescreenShape("16:10", 16u, 10u) && widescreenShape("3440:1440", 3440u, 1440u) &&
+        widescreenShape("1", 16u, 9u) && widescreenShape("16:10junk", 16u, 9u) &&
+        widescreenShape("5760:1080", 16u, 9u) && widescreenShape("4294967312:10", 16u, 9u);
+}
+
+static bool sameScale(const RecompWidescreen2dScale &scale, float x, float y)
 {
     return std::fabs(scale.x - x) < 1e-4f && std::fabs(scale.y - y) < 1e-4f;
 }
@@ -2550,6 +2567,10 @@ int main()
     }
     if (!testWidescreen2dScale()) {
         std::fprintf(stderr, "FAIL widescreen 2D scale\n");
+        return 1;
+    }
+    if (!testWidescreenShape()) {
+        std::fprintf(stderr, "FAIL widescreen shape\n");
         return 1;
     }
     FrameRateCounter counter;

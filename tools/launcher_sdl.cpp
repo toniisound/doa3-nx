@@ -454,10 +454,12 @@ int main(int argc, char **argv)
         settings.volume = kVolumes[launcher.choice[VOLUME]];
         settings.screen = kScreens[launcher.choice[WIDESCREEN]];
         if (launcher.choice[WIDESCREEN] == 3) {
-            // The primary screen's own shape when it is wider than 16:9, else 21:9 (2560x1080).
+            // The primary screen's own shape when it is wider than 16:9 (at most the
+            // runtime's 4:1), else 21:9 (2560x1080).
             const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
             settings.screen = mode != nullptr && mode->w * 9 > mode->h * 16
-                ? std::to_string(mode->w) + ":" + std::to_string(mode->h) : "64:27";
+                ? std::to_string(std::min(mode->w, mode->h * 4)) + ":" + std::to_string(mode->h)
+                : "64:27";
         }
         settings.free_camera = launcher.choice[FREE_CAMERA] != 0;
         settings.swimsuits = launcher.choice[SWIMSUITS] != 0;

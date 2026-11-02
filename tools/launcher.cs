@@ -77,11 +77,13 @@ static class Game
         return Str(s, "screen", Bool(s, "widescreen", false) ? "16:9" : "4:3");
     }
 
-    // The primary screen's own shape when it is wider than 16:9, else 21:9 (2560x1080).
+    // The primary screen's own shape when it is wider than 16:9 (at most the
+    // runtime's 4:1), else 21:9 (2560x1080).
     public static string UltrawideShape()
     {
         var bounds = Screen.PrimaryScreen.Bounds;
-        return bounds.Width * 9 > bounds.Height * 16 ? bounds.Width + ":" + bounds.Height : "64:27";
+        return bounds.Width * 9 > bounds.Height * 16
+            ? Math.Min(bounds.Width, bounds.Height * 4) + ":" + bounds.Height : "64:27";
     }
 
     public static string FirstLine(string path)

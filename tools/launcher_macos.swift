@@ -44,7 +44,7 @@ func ultrawideShape() -> String {
     guard let screen = NSScreen.screens.first else { return "64:27" }
     let w = Int(screen.frame.width * screen.backingScaleFactor)
     let h = Int(screen.frame.height * screen.backingScaleFactor)
-    return w * 9 > h * 16 ? "\(w):\(h)" : "64:27"
+    return w * 9 > h * 16 ? "\(min(w, h * 4)):\(h)" : "64:27" // the runtime takes up to 4:1
 }
 let screenHeight: Int = {
     guard let screen = NSScreen.screens.first ?? NSScreen.main else { return 1080 }
