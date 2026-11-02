@@ -120,6 +120,7 @@ The manifest is computed the way doaxbv-re's `build_game.py` does it: one
 ```powershell
 # Put llvm-mingw and CMake on PATH, downloading them into private/ the first time.
 $env:PATH = (python -c "import os, sys; sys.path.insert(0, 'tools'); import build_game; print(os.pathsep.join(map(str, build_game.windows_tools())))" | Select-Object -Last 1) + ";$env:PATH"
+# CMake cannot change a build folder's generator: delete a Visual Studio or Ninja build/recomp-program first.
 cmake -S recomp-runtime -B build/recomp-program -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release `
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
   -DRECOMP_PROGRAM_DIR=private/lift-init2/generated `

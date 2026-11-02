@@ -11,7 +11,7 @@ if ($Build) {
     }
     # tools/build_game.py configures with llvm-mingw's Clang and make and Kitware's CMake.
     $py = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
-    $tools = & $py -c "import os, sys; sys.path.insert(0, r'$PSScriptRoot'); import build_game; print(os.pathsep.join(map(str, build_game.windows_tools())))" |
+    $tools = & $py -c "import os, sys; sys.path.insert(0, sys.argv[1]); import build_game; print(os.pathsep.join(map(str, build_game.windows_tools())))" $PSScriptRoot |
         Select-Object -Last 1
     if ($LASTEXITCODE -or -not $tools) { throw "Could not set up llvm-mingw and CMake; run tools/build_game.py once." }
     $env:PATH = $tools + ";$env:PATH"
