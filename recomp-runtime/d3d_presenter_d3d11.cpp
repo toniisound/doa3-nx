@@ -4,6 +4,7 @@
 #include "d3d_vertex_program.h"
 #include "overlay_d3d11.h"
 #include "screenshot.h"
+#include "widescreen.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -447,6 +448,7 @@ struct RecompD3dPresenter {
     HWND window = nullptr;
     bool close_requested = false;
     bool widescreen = false;
+    uint32_t aspect_w = 16u, aspect_h = 9u; // widescreen shape, from RECOMP_D3D_WIDESCREEN
     float scale = 1.0f;         // RECOMP_D3D_SCALE: main target height multiplier
     uint32_t msaa = 1u;         // RECOMP_D3D_MSAA: main target sample count
     float target_scale_x = 1.0f, target_scale_y = 1.0f; // bound target / guest size
@@ -544,23 +546,31 @@ RecompD3dPresenter *active_presenter;
 static bool immediate_present;
 
 /* kernel_config.c reports the Xbox widescreen video flag only when
-   RECOMP_D3D_WIDESCREEN=1, so the game renders 4:3 (or anamorphic 16:9) into
-   the guest backbuffer; the window presents that buffer at the same aspect. */
+   RECOMP_D3D_WIDESCREEN is set, so the game renders 4:3 (or anamorphic
+   16:9, or the shape the runner gives it) into the guest backbuffer; the
+   window presents that buffer at the same aspect. */
 uint32_t presentClientWidth(const RecompD3dPresenter *presenter, uint64_t height)
 {
     return static_cast<uint32_t>(presenter->widescreen
-        ? (height * 16u + 8u) / 9u
+        ? (height * presenter->aspect_w + presenter->aspect_h - 1u) / presenter->aspect_h
         : (height * 4u + 1u) / 3u);
 }
 
 /* DOA3 widens only its 3D view and its movies at 16:9; HUD, menu and
    subtitle quads keep 4:3 positions and would stretch by a third. A
    screen-space quad narrower than the centered 4:3 window is that 2D layer,
-   so it is narrowed by 3/4 about the screen center. Fades, backdrops and the
-   already pillarboxed movie span the window and keep their geometry. */
+   so it is narrowed about the screen center by widescreen2dScale. Fades,
+   backdrops and the already pillarboxed movie span the window and keep their
+   geometry. */
 bool squeezeWidescreen2d(float left, float right, float width)
 {
     return left > width / 8.0f + 1.0f || right < width * 7.0f / 8.0f - 1.0f;
+}
+
+// 4:3 over the widescreen shape: 3/4 at 16:9, 5/6 at 16:10.
+float widescreen2dScale(const RecompD3dPresenter *presenter)
+{
+    return 4.0f * presenter->aspect_h / (3.0f * presenter->aspect_w);
 }
 
 /* A scaled main target renders at the display aspect, so the anamorphic guest
@@ -606,16 +616,12 @@ bool scalesToWindow(const RecompD3dPresenter *presenter)
 }
 
 /* The largest display-aspect rectangle centered in the window; the rest of a
-   screen with another shape stays black. DOA3's 16:9 is Hor+ with its HUD in
-   the center 4:3, so on a screen between 4:3 and 16:9 (16:10) widescreen
-   fills the height and trims the sides of the 3D view instead. */
+   screen with another shape (4:3 on a wide screen, or 21:9) stays black. */
 D3D11_VIEWPORT fitViewport(const RecompD3dPresenter *presenter, UINT width, UINT height)
 {
     const UINT full_width = presentClientWidth(presenter, height);
-    const bool full_height = full_width <= width ||
-        (presenter->widescreen && width * 3u >= height * 4u);
-    const float w = static_cast<float>(full_height ? full_width : width);
-    const float h = full_height ? static_cast<float>(height)
+    const float w = static_cast<float>((std::min)(full_width, width));
+    const float h = full_width <= width ? static_cast<float>(height)
         : std::round(static_cast<float>(width) * height / full_width);
     return {std::floor((width - w) / 2.0f), std::floor((height - h) / 2.0f), w, h, 0.0f, 1.0f};
 }
@@ -2603,8 +2609,9 @@ RecompD3dPresenterError submitDraw(
             }
             const float width = static_cast<float>(presenter->config.width);
             if (squeezeWidescreen2d(left, right, width)) {
-                draw_constants[12] += draw_constants[0] * 0.125f * width;
-                draw_constants[0] *= 0.75f;
+                const float squeeze = widescreen2dScale(presenter);
+                draw_constants[12] += draw_constants[0] * 0.5f * (1.0f - squeeze) * width;
+                draw_constants[0] *= squeeze;
             }
         }
     }
@@ -2776,8 +2783,10 @@ RecompD3dPresenterError submitDraw(
         const float width = static_cast<float>(presenter->config.width);
         if (presenter->widescreen && !draw.target.offscreen &&
             squeezeWidescreen2d(draw.viewport[0], draw.viewport[0] + draw.viewport[2], width)) {
-            guest.TopLeftX = (0.75f * draw.viewport[0] + 0.125f * width) * presenter->target_scale_x;
-            guest.Width *= 0.75f;
+            const float squeeze = widescreen2dScale(presenter);
+            guest.TopLeftX = (squeeze * draw.viewport[0] + 0.5f * (1.0f - squeeze) * width) *
+                presenter->target_scale_x;
+            guest.Width *= squeeze;
         }
         /* 3925 SetViewport clamps to the bound target, and SetRenderTarget
            resets it to the full target, so the guest rect always fits. */
@@ -3632,8 +3641,10 @@ RecompD3dPresenterError d3d11_backend_create(
         return RECOMP_D3D_PRESENTER_OUT_OF_MEMORY;
     }
     created->config = *config;
-    const char *widescreen = std::getenv("RECOMP_D3D_WIDESCREEN");
-    created->widescreen = widescreen != nullptr && std::strcmp(widescreen, "0") != 0;
+    unsigned aspect_w = 16u, aspect_h = 9u;
+    created->widescreen = recomp_widescreen(&aspect_w, &aspect_h);
+    created->aspect_w = aspect_w;
+    created->aspect_h = aspect_h;
     const char *performance = std::getenv("RECOMP_PERF_COUNTER");
     created->performance_counter = performance != nullptr && std::strcmp(performance, "1") == 0;
     if (const char *scale = std::getenv("RECOMP_D3D_SCALE")) {

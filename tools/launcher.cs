@@ -70,6 +70,12 @@ static class Game
         return s.TryGetValue(key, out v) && v is string ? (string)v : fallback;
     }
 
+    // "4:3", "16:9" or "16:10"; settings saved before 16:10 hold a widescreen flag.
+    public static string Screen(Dictionary<string, object> s)
+    {
+        return Str(s, "screen", Bool(s, "widescreen", false) ? "16:9" : "4:3");
+    }
+
     public static string FirstLine(string path)
     {
         if (!File.Exists(path)) return null;
@@ -177,7 +183,8 @@ static class Game
         env["RECOMP_D3D_SCALE"] = (Int(settings, "height", 480) / 480.0).ToString(CultureInfo.InvariantCulture);
         env["RECOMP_D3D_MSAA"] = Int(settings, "msaa", 1).ToString(CultureInfo.InvariantCulture);
         env["RECOMP_D3D_SMAA"] = Bool(settings, "smaa", false) ? "1" : "0";
-        env["RECOMP_D3D_WIDESCREEN"] = Bool(settings, "widescreen", false) ? "1" : "0";
+        string shape = Screen(settings);
+        env["RECOMP_D3D_WIDESCREEN"] = shape == "4:3" ? "0" : shape;
         env["RECOMP_FREE_CAMERA"] = Bool(settings, "free_camera", false) ? "1" : "0";
         env["RECOMP_AUDIO_GAIN"] = (Int(settings, "volume", 100) / 100.0).ToString(CultureInfo.InvariantCulture);
         if (Bool(settings, "swimsuits", true)) SwimsuitEnv(env, settings);
@@ -242,6 +249,7 @@ class LauncherForm : Form
 {
     static readonly int[] Heights = { 480, 720, 1080, 1440, 2160 };
     static readonly int[] Samples = { 1, 2, 4, 8 };
+    static readonly string[] Screens = { "4:3", "16:9", "16:10" };
     static readonly int[] Volumes = { 0, 25, 50, 75, 100 };
     const int BuildPage = 4, PlayPage = 5;
     // Horizon Bar layout on a 960x540 window: letterbox bars, the settings and page tabs in the bottom one.
@@ -295,8 +303,8 @@ class LauncherForm : Form
         msaa = new Row { Label = "MSAA", Info = "Smooths polygon edges with multisampling", Names = new[] { "Off", "2x", "4x", "8x" },
             Index = Math.Max(0, Array.IndexOf(Samples, Game.Int(settings, "msaa", 1))) };
         smaa = Toggle("SMAA", "Smooths edges with a post-process filter", Game.Bool(settings, "smaa", false), 0);
-        screen = new Row { Label = "Screen", Info = "Wider 3D view. The HUD and menus stay 4:3", Names = new[] { "4:3", "16:9" },
-            Index = Game.Bool(settings, "widescreen", false) ? 1 : 0 };
+        screen = new Row { Label = "Screen", Info = "Wider 3D view. The HUD and menus stay 4:3", Names = Screens,
+            Index = Math.Max(0, Array.IndexOf(Screens, Game.Screen(settings))) };
         int savedVolume = Array.IndexOf(Volumes, Game.Int(settings, "volume", 100));
         volume = new Row { Label = "Volume", Info = "Sets the master volume", Names = Volumes.Select(v => v.ToString()).ToArray(),
             Index = savedVolume < 0 ? Volumes.Length - 1 : savedVolume, Default = Volumes.Length - 1 };
@@ -373,7 +381,7 @@ class LauncherForm : Form
     {
         return new Dictionary<string, object> {
             { "height", Heights[resolution.Index] }, { "msaa", Samples[msaa.Index] }, { "smaa", smaa.Index == 1 },
-            { "widescreen", screen.Index == 1 }, { "volume", Volumes[volume.Index] },
+            { "screen", Screens[screen.Index] }, { "volume", Volumes[volume.Index] },
             { "free_camera", freeCamera.Index == 1 },
             { "swimsuits", swimsuits.Index == 1 }, { "swimsuit_start_favorite", startFavorite.Index == 1 },
             { "game_source", gameSource }, { "movies", movies.Index == 1 } };

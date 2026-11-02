@@ -28,6 +28,7 @@ constexpr float kInfoY = 262, kLabelY = 296, kValueY = 310, kValueH = 16, kTabY 
 
 const int kHeights[] = {480, 720, 1080, 1440, 2160};
 const int kSamples[] = {1, 2, 4, 8};
+const char *const kScreens[] = {"4:3", "16:9", "16:10"};
 const int kVolumes[] = {100, 75, 50, 25, 0};
 
 enum Item { RESOLUTION, MSAA, VOLUME, WIDESCREEN, FREE_CAMERA, SWIMSUITS, START_FAVORITE, ITEM_COUNT };
@@ -48,7 +49,7 @@ struct Settings {
     int height = 0;
     int msaa = 1;
     int volume = 100;
-    bool widescreen = false;
+    std::string screen = "4:3";
     bool free_camera = false;  // F1, ` or the right stick's click takes the camera
     bool swimsuits = true;   // DOAXBV swimsuits from private/doaxbv-path.txt or an .iso in private/
     bool start_favorite = false;
@@ -81,7 +82,9 @@ Settings loadSettings(const std::string &path)
     if (jsonValue(text, "height", value)) settings.height = std::atoi(value.c_str());
     if (jsonValue(text, "msaa", value)) settings.msaa = std::atoi(value.c_str());
     if (jsonValue(text, "volume", value)) settings.volume = std::atoi(value.c_str());
-    if (jsonValue(text, "widescreen", value)) settings.widescreen = value == "true";
+    // Settings saved before 16:10 hold a widescreen flag.
+    if (jsonValue(text, "widescreen", value)) settings.screen = value == "true" ? "16:9" : "4:3";
+    if (jsonValue(text, "screen", value) && value.size() > 2) settings.screen = value.substr(1, value.size() - 2);
     if (jsonValue(text, "free_camera", value)) settings.free_camera = value == "true";
     if (jsonValue(text, "swimsuits", value)) settings.swimsuits = value != "false";
     if (jsonValue(text, "swimsuit_start_favorite", value)) settings.start_favorite = value == "true";
@@ -93,7 +96,7 @@ bool saveSettings(const std::string &path, const Settings &settings)
     std::ofstream file(path, std::ios::trunc);
     file << "{\n  \"height\": " << settings.height << ",\n  \"msaa\": " << settings.msaa
          << ",\n  \"smaa\": false,\n  \"volume\": " << settings.volume
-         << ",\n  \"widescreen\": " << (settings.widescreen ? "true" : "false")
+         << ",\n  \"screen\": \"" << settings.screen << '"'
          << ",\n  \"free_camera\": " << (settings.free_camera ? "true" : "false")
          << ",\n  \"swimsuits\": " << (settings.swimsuits ? "true" : "false")
          << ",\n  \"swimsuit_start_favorite\": " << (settings.start_favorite ? "true" : "false") << "\n}\n";
@@ -148,7 +151,7 @@ struct Launcher {
         case RESOLUTION: return std::to_string(kHeights[choice[item]]) + "P";
         case MSAA: return kSamples[choice[item]] == 1 ? "OFF" : std::to_string(kSamples[choice[item]]) + "X";
         case VOLUME: return kVolumes[choice[item]] == 0 ? "MUTE" : std::to_string(kVolumes[choice[item]]) + "%";
-        case WIDESCREEN: return choice[item] ? "16:9" : "4:3";
+        case WIDESCREEN: return kScreens[choice[item]];
         default: return choice[item] ? "ON" : "OFF";
         }
     }
@@ -156,7 +159,8 @@ struct Launcher {
     void change(int item, int step)
     {
         static const int counts[] = {static_cast<int>(std::size(kHeights)),
-            static_cast<int>(std::size(kSamples)), static_cast<int>(std::size(kVolumes)), 2, 2, 2, 2};
+            static_cast<int>(std::size(kSamples)), static_cast<int>(std::size(kVolumes)),
+            static_cast<int>(std::size(kScreens)), 2, 2, 2};
         choice[item] = (choice[item] + counts[item] + step) % counts[item];
     }
 
@@ -354,7 +358,10 @@ int main(int argc, char **argv)
     launcher.choice[RESOLUTION] = std::max(0, nearest);
     launcher.choice[MSAA] = indexOf(kSamples, settings.msaa, 0);
     launcher.choice[VOLUME] = indexOf(kVolumes, settings.volume, 0);
-    launcher.choice[WIDESCREEN] = settings.widescreen ? 1 : 0;
+    launcher.choice[WIDESCREEN] = 0;
+    for (int i = 0; i < static_cast<int>(std::size(kScreens)); ++i) {
+        if (settings.screen == kScreens[i]) launcher.choice[WIDESCREEN] = i;
+    }
     launcher.choice[FREE_CAMERA] = settings.free_camera ? 1 : 0;
     launcher.choice[SWIMSUITS] = settings.swimsuits ? 1 : 0;
     launcher.choice[START_FAVORITE] = settings.start_favorite ? 1 : 0;
@@ -445,7 +452,7 @@ int main(int argc, char **argv)
         settings.height = kHeights[launcher.choice[RESOLUTION]];
         settings.msaa = kSamples[launcher.choice[MSAA]];
         settings.volume = kVolumes[launcher.choice[VOLUME]];
-        settings.widescreen = launcher.choice[WIDESCREEN] != 0;
+        settings.screen = kScreens[launcher.choice[WIDESCREEN]];
         settings.free_camera = launcher.choice[FREE_CAMERA] != 0;
         settings.swimsuits = launcher.choice[SWIMSUITS] != 0;
         settings.start_favorite = launcher.choice[START_FAVORITE] != 0;

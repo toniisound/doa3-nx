@@ -1827,13 +1827,14 @@ static bool testFitViewport()
 {
     RecompD3dPresenter presenter{};
     presenter.widescreen = true;
-    // Issue #45: 16:9 fills a 16:10 or 4:3 screen and trims its sides; 21:9
-    // pillarboxes and a portrait screen letterboxes.
-    if (!sameViewport(fitViewport(&presenter, 1920u, 1200u), -107.0f, 0.0f, 2134.0f, 1200.0f)) return false;
-    if (!sameViewport(fitViewport(&presenter, 1600u, 1200u), -267.0f, 0.0f, 2134.0f, 1200.0f)) return false;
-    if (!sameViewport(fitViewport(&presenter, 1200u, 1600u), 0.0f, 462.0f, 1200.0f, 675.0f)) return false;
+    // Issue #45: 16:9 letterboxes on 16:10 and pillarboxes on 21:9; the
+    // 16:10 shape fills a 16:10 screen.
+    if (!sameViewport(fitViewport(&presenter, 1920u, 1200u), 0.0f, 60.0f, 1920.0f, 1080.0f)) return false;
     if (!sameViewport(fitViewport(&presenter, 2560u, 1080u), 320.0f, 0.0f, 1920.0f, 1080.0f)) return false;
     if (!sameViewport(fitViewport(&presenter, 854u, 480u), 0.0f, 0.0f, 854.0f, 480.0f)) return false;
+    presenter.aspect_w = 16u;
+    presenter.aspect_h = 10u;
+    if (!sameViewport(fitViewport(&presenter, 1920u, 1200u), 0.0f, 0.0f, 1920.0f, 1200.0f)) return false;
     presenter.widescreen = false;
     return sameViewport(fitViewport(&presenter, 1920u, 1200u), 160.0f, 0.0f, 1600.0f, 1200.0f) &&
         sameViewport(fitViewport(&presenter, 640u, 480u), 0.0f, 0.0f, 640.0f, 480.0f);

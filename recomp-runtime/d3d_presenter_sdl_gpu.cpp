@@ -5,6 +5,7 @@
 #include "d3d_draw_model.h"
 #include "d3d_texture_model.h"
 #include "d3d_vertex_program.h"
+#include "widescreen.h"
 
 #include <SDL3/SDL.h>
 
@@ -424,6 +425,7 @@ struct RecompD3dPresenter {
 
     float scale = 1.0f;
     bool widescreen = false;
+    uint32_t aspect_w = 16u, aspect_h = 9u; // widescreen shape, from RECOMP_D3D_WIDESCREEN
 
     // SetGammaRamp applies when a frame is shown; guest reads stay uncorrected.
     bool gamma_enabled = false;
@@ -446,7 +448,7 @@ inline uint32_t mainHeight(const RecompD3dPresenter *p) {
 
 inline uint32_t presentClientWidth(const RecompD3dPresenter *p, uint32_t height) {
     return static_cast<uint32_t>(p->widescreen
-        ? (height * 16u + 8u) / 9u
+        ? (height * p->aspect_w + p->aspect_h - 1u) / p->aspect_h
         : (height * 4u + 1u) / 3u);
 }
 
@@ -459,9 +461,15 @@ inline uint32_t mainWidth(const RecompD3dPresenter *p) {
 /* As in the D3D11 presenter: DOA3 widens only its 3D view and movies at
    16:9, while HUD, menu and subtitle quads keep 4:3 positions. A screen-space
    quad narrower than the centered 4:3 window is that 2D layer and is narrowed
-   by 3/4 about the screen center; full-width fades and backdrops are kept. */
+   by widescreen2dScale about the screen center; full-width fades and
+   backdrops are kept. */
 inline bool squeezeWidescreen2d(float left, float right, float width) {
     return left > width / 8.0f + 1.0f || right < width * 7.0f / 8.0f - 1.0f;
+}
+
+// 4:3 over the widescreen shape: 3/4 at 16:9, 5/6 at 16:10.
+inline float widescreen2dScale(const RecompD3dPresenter *p) {
+    return 4.0f * p->aspect_h / (3.0f * p->aspect_w);
 }
 
 namespace {
@@ -2428,14 +2436,15 @@ RecompD3dPresenterError recomp_d3d_presenter_create(
             scale = std::clamp(val, 1.0f, 8.0f);
         }
     }
-    const char *widescreen_env = std::getenv("RECOMP_D3D_WIDESCREEN");
-    /* DOA3 renders 4:3 unless RECOMP_D3D_WIDESCREEN=1 sets the Xbox widescreen flag. */
-    const bool widescreen = widescreen_env != nullptr && std::strcmp(widescreen_env, "0") != 0;
+    /* DOA3 renders 4:3 unless RECOMP_D3D_WIDESCREEN sets the Xbox widescreen flag. */
+    unsigned aspect_w = 16u, aspect_h = 9u;
+    const bool widescreen = recomp_widescreen(&aspect_w, &aspect_h);
 
     const uint32_t main_h = static_cast<uint32_t>(config->height * scale + 0.5f);
     // The window shows the display aspect; at scale 1 the main target keeps
     // the guest width, anamorphic when widescreen.
-    const uint32_t display_w = widescreen ? (main_h * 16u + 8u) / 9u : (main_h * 4u + 1u) / 3u;
+    const uint32_t display_w = widescreen
+        ? (main_h * aspect_w + aspect_h - 1u) / aspect_h : (main_h * 4u + 1u) / 3u;
     const uint32_t main_w = scale == 1.0f ? config->width : display_w;
 
     uint32_t win_w = display_w;
@@ -2697,6 +2706,8 @@ RecompD3dPresenterError recomp_d3d_presenter_create(
     p->config = *config;
     p->scale = scale;
     p->widescreen = widescreen;
+    p->aspect_w = aspect_w;
+    p->aspect_h = aspect_h;
     p->use_spirv = (SDL_GetGPUShaderFormats(device) & SDL_GPU_SHADERFORMAT_SPIRV) != 0;
     p->owner_thread = std::this_thread::get_id();
     const char *performance = std::getenv("RECOMP_PERF_COUNTER");
@@ -2860,11 +2871,6 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
                 if (dst_aspect > src_aspect) {
                     dst_w = static_cast<int>(swap_h * src_aspect + 0.5f);
                     dst_x = (swap_w - dst_w) / 2;
-                } else if (presenter->widescreen && swap_w * 3u >= swap_h * 4u) {
-                    /* As in the D3D11 presenter: 16:9 is Hor+ with its HUD in
-                       the center 4:3, so 16:10 trims the 3D view's sides. */
-                    blit.source.w = static_cast<Uint32>(blit.source.w * dst_aspect / src_aspect + 0.5f);
-                    blit.source.x = (mainWidth(presenter) - blit.source.w) / 2u;
                 } else {
                     dst_h = static_cast<int>(swap_w / src_aspect + 0.5f);
                     dst_y = (swap_h - dst_h) / 2;
@@ -3115,8 +3121,9 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
                 }
                 const float width = static_cast<float>(presenter->config.width);
                 if (squeezeWidescreen2d(left, right, width)) {
-                    constants[12] += constants[0] * 0.125f * width;
-                    constants[0] *= 0.75f;
+                    const float squeeze = widescreen2dScale(presenter);
+                    constants[12] += constants[0] * 0.5f * (1.0f - squeeze) * width;
+                    constants[0] *= squeeze;
                 }
             }
         }
@@ -3271,8 +3278,9 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
             const float width = static_cast<float>(presenter->config.width);
             if (presenter->widescreen && !draw.target.offscreen &&
                 squeezeWidescreen2d(draw.viewport[0], draw.viewport[0] + draw.viewport[2], width)) {
-                q.viewport.x = (0.75f * draw.viewport[0] + 0.125f * width) * scale_x;
-                q.viewport.w *= 0.75f;
+                const float squeeze = widescreen2dScale(presenter);
+                q.viewport.x = (squeeze * draw.viewport[0] + 0.5f * (1.0f - squeeze) * width) * scale_x;
+                q.viewport.w *= squeeze;
             }
         }
         q.stencil_ref = static_cast<uint8_t>(draw.depth.stencil_ref);
