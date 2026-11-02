@@ -461,12 +461,12 @@ struct RecompD3dPresenter {
     IDXGISwapChain *swap_chain = nullptr;
     ID3D11RenderTargetView *render_target_view = nullptr;
     ID3D11RenderTargetView *present_target_view = nullptr;
-    // VRR only: main-sized output, downscaled into the window-sized swap chain.
-    ID3D11RenderTargetView *vrr_target_view = nullptr;
-    ID3D11ShaderResourceView *vrr_source = nullptr;
-    ID3D11VertexShader *vrr_vs = nullptr;
-    ID3D11PixelShader *vrr_ps = nullptr;
-    ID3D11SamplerState *vrr_sampler = nullptr;
+    // Main-sized output, fitted into a window-sized swap chain of another size.
+    ID3D11RenderTargetView *output_target_view = nullptr;
+    ID3D11ShaderResourceView *output_source = nullptr;
+    ID3D11VertexShader *output_vs = nullptr;
+    ID3D11PixelShader *output_ps = nullptr;
+    ID3D11SamplerState *output_sampler = nullptr;
     ID3D11VertexShader *gamma_vertex_shader = nullptr;
     ID3D11PixelShader *gamma_pixel_shader = nullptr;
     ID3D11Buffer *gamma_buffer = nullptr;
@@ -576,25 +576,44 @@ uint32_t mainWidth(const RecompD3dPresenter *presenter)
         ? presenter->config.width : presentClientWidth(presenter, mainHeight(presenter));
 }
 
-/* Beyond the screen the swap chain downsamples into a screen-sized window. */
-uint32_t windowHeight(const RecompD3dPresenter *presenter)
+/* A scaled window covers the primary screen, whatever its aspect; scale 1
+   keeps a 480-line window. */
+uint32_t windowWidth(const RecompD3dPresenter *presenter)
 {
-    return presenter->scale == 1.0f ? presenter->config.height : (std::min)(
-        mainHeight(presenter), static_cast<uint32_t>(GetSystemMetrics(SM_CYSCREEN)));
+    return presenter->scale == 1.0f
+        ? presentClientWidth(presenter, presenter->config.height)
+        : static_cast<uint32_t>(GetSystemMetrics(SM_CXSCREEN));
 }
 
-/* VRR needs direct flip, which a DWM-scaled swap chain loses; with VRR the
-   swap chain matches the window and the presenter scales into it itself. */
+uint32_t windowHeight(const RecompD3dPresenter *presenter)
+{
+    return presenter->scale == 1.0f
+        ? presenter->config.height : static_cast<uint32_t>(GetSystemMetrics(SM_CYSCREEN));
+}
+
+/* VRR needs direct flip. */
 bool immediatePresent(const RecompD3dPresenter *presenter)
 {
     return immediate_present && !presenter->vrr;
 }
 
-bool vrrScaled(const RecompD3dPresenter *presenter)
+/* The swap chain always matches the window, so DWM never stretches it out of
+   shape; a main target of another size is drawn into it by the presenter. */
+bool scalesToWindow(const RecompD3dPresenter *presenter)
 {
-    return presenter->vrr &&
-        (mainWidth(presenter) != presentClientWidth(presenter, windowHeight(presenter)) ||
-         mainHeight(presenter) != windowHeight(presenter));
+    return mainWidth(presenter) != windowWidth(presenter) ||
+        mainHeight(presenter) != windowHeight(presenter);
+}
+
+/* The largest display-aspect rectangle centered in the window; the rest of a
+   screen with another shape (16:10, 21:9) stays black. */
+D3D11_VIEWPORT fitViewport(const RecompD3dPresenter *presenter, UINT width, UINT height)
+{
+    const UINT full_width = presentClientWidth(presenter, height);
+    const float w = static_cast<float>((std::min)(full_width, width));
+    const float h = full_width <= width ? static_cast<float>(height)
+        : std::round(static_cast<float>(width) * height / full_width);
+    return {std::floor((width - w) / 2.0f), std::floor((height - h) / 2.0f), w, h, 0.0f, 1.0f};
 }
 
 LRESULT CALLBACK presenterWindowProc(
@@ -646,11 +665,11 @@ void releaseGraphics(RecompD3dPresenter *presenter)
     }
     recomp_overlay_d3d11_shutdown();
     releaseCom(presenter->present_target_view);
-    releaseCom(presenter->vrr_target_view);
-    releaseCom(presenter->vrr_source);
-    releaseCom(presenter->vrr_vs);
-    releaseCom(presenter->vrr_ps);
-    releaseCom(presenter->vrr_sampler);
+    releaseCom(presenter->output_target_view);
+    releaseCom(presenter->output_source);
+    releaseCom(presenter->output_vs);
+    releaseCom(presenter->output_ps);
+    releaseCom(presenter->output_sampler);
     releaseCom(presenter->gamma_vertex_shader);
     releaseCom(presenter->gamma_pixel_shader);
     releaseCom(presenter->gamma_buffer);
@@ -747,7 +766,7 @@ void releasePresenter(RecompD3dPresenter *presenter)
 bool createWindow(RecompD3dPresenter *presenter)
 {
     WNDCLASSEXW window_class{};
-    const uint32_t client_width = presentClientWidth(presenter, windowHeight(presenter));
+    const uint32_t client_width = windowWidth(presenter);
     RECT window_rect = {
         0,
         0,
@@ -819,10 +838,8 @@ HRESULT createDeviceWithDriver(
     };
     D3D_FEATURE_LEVEL selected_feature_level{};
 
-    swap_chain_desc.BufferDesc.Width = vrrScaled(presenter)
-        ? presentClientWidth(presenter, windowHeight(presenter)) : mainWidth(presenter);
-    swap_chain_desc.BufferDesc.Height = vrrScaled(presenter)
-        ? windowHeight(presenter) : mainHeight(presenter);
+    swap_chain_desc.BufferDesc.Width = windowWidth(presenter);
+    swap_chain_desc.BufferDesc.Height = windowHeight(presenter);
     swap_chain_desc.BufferDesc.RefreshRate.Numerator = 0u;
     swap_chain_desc.BufferDesc.RefreshRate.Denominator = 1u;
     swap_chain_desc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -932,7 +949,7 @@ HRESULT createGraphics(RecompD3dPresenter *presenter)
         }
         releaseCom(guest_buffer);
     }
-    if (SUCCEEDED(result) && vrrScaled(presenter)) {
+    if (SUCCEEDED(result) && scalesToWindow(presenter)) {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = mainWidth(presenter);
         desc.Height = mainHeight(presenter);
@@ -943,9 +960,9 @@ HRESULT createGraphics(RecompD3dPresenter *presenter)
         ID3D11Texture2D *output = nullptr;
         result = presenter->device->CreateTexture2D(&desc, nullptr, &output);
         if (SUCCEEDED(result)) result = presenter->device->CreateRenderTargetView(
-            output, nullptr, &presenter->vrr_target_view);
+            output, nullptr, &presenter->output_target_view);
         if (SUCCEEDED(result)) result = presenter->device->CreateShaderResourceView(
-            output, nullptr, &presenter->vrr_source);
+            output, nullptr, &presenter->output_source);
         releaseCom(output);
         static const char shader[] =
             "Texture2D pixels : register(t0);\n"
@@ -961,9 +978,9 @@ HRESULT createGraphics(RecompD3dPresenter *presenter)
         if (SUCCEEDED(result)) result = D3DCompile(shader, sizeof shader - 1u, nullptr,
             nullptr, nullptr, "ps", "ps_4_0", 0u, 0u, &pixel, nullptr);
         if (SUCCEEDED(result)) result = presenter->device->CreateVertexShader(
-            vertex->GetBufferPointer(), vertex->GetBufferSize(), nullptr, &presenter->vrr_vs);
+            vertex->GetBufferPointer(), vertex->GetBufferSize(), nullptr, &presenter->output_vs);
         if (SUCCEEDED(result)) result = presenter->device->CreatePixelShader(
-            pixel->GetBufferPointer(), pixel->GetBufferSize(), nullptr, &presenter->vrr_ps);
+            pixel->GetBufferPointer(), pixel->GetBufferSize(), nullptr, &presenter->output_ps);
         releaseCom(vertex);
         releaseCom(pixel);
         D3D11_SAMPLER_DESC sampler{};
@@ -971,7 +988,7 @@ HRESULT createGraphics(RecompD3dPresenter *presenter)
         sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
         sampler.MaxLOD = D3D11_FLOAT32_MAX;
         if (SUCCEEDED(result)) result = presenter->device->CreateSamplerState(
-            &sampler, &presenter->vrr_sampler);
+            &sampler, &presenter->output_sampler);
     }
     releaseCom(back_buffer);
     if (FAILED(result)) {
@@ -3330,12 +3347,19 @@ void recordFrameStatistics(RecompD3dPresenter *presenter,
     presenter->last_stat_refresh = stats.PresentRefreshCount;
 }
 
-// Saves the window's back buffer, the game's frame before the overlay, through
-// a CPU-readable copy. Only a requested screenshot pays for the wait.
+// Saves the game's frame before the overlay and any fitting bars, through a
+// CPU-readable copy. Only a requested screenshot pays for the wait.
 void saveScreenshot(RecompD3dPresenter *presenter)
 {
     ID3D11Texture2D *back_buffer = nullptr;
-    presenter->swap_chain->GetBuffer(0u, IID_PPV_ARGS(&back_buffer));
+    if (presenter->output_source != nullptr) {
+        ID3D11Resource *frame = nullptr;
+        presenter->output_source->GetResource(&frame);
+        frame->QueryInterface(IID_PPV_ARGS(&back_buffer));
+        releaseCom(frame);
+    } else {
+        presenter->swap_chain->GetBuffer(0u, IID_PPV_ARGS(&back_buffer));
+    }
     bool saved = false;
     if (back_buffer == nullptr) {
         std::fprintf(stderr, "recomp screenshot: could not read the back buffer\n");
@@ -3397,11 +3421,11 @@ RecompD3dPresenterError submitPresent(
        unconditionally meant the throttled path was never actually throttled:
        every frame was retired immediately and only the blocking behaviour
        changed. Pace to one refresh unless immediate presenting is asked for. */
-    if (!renderOutput(presenter, presenter->vrr_target_view != nullptr
-            ? presenter->vrr_target_view : presenter->present_target_view)) {
+    if (!renderOutput(presenter, presenter->output_target_view != nullptr
+            ? presenter->output_target_view : presenter->present_target_view)) {
         return RECOMP_D3D_PRESENTER_HOST_FAILURE;
     }
-    if (presenter->vrr_target_view != nullptr) {
+    if (presenter->output_target_view != nullptr) {
         auto *context = presenter->context;
         D3D11_TEXTURE2D_DESC window{};
         ID3D11Texture2D *back_buffer = nullptr;
@@ -3409,16 +3433,17 @@ RecompD3dPresenterError submitPresent(
         if (back_buffer == nullptr) return RECOMP_D3D_PRESENTER_HOST_FAILURE;
         back_buffer->GetDesc(&window);
         releaseCom(back_buffer);
-        const D3D11_VIEWPORT viewport = {0.0f, 0.0f,
-            static_cast<float>(window.Width), static_cast<float>(window.Height), 0.0f, 1.0f};
+        const D3D11_VIEWPORT viewport = fitViewport(presenter, window.Width, window.Height);
+        static const float black[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         context->ClearState();
+        context->ClearRenderTargetView(presenter->present_target_view, black);
         context->RSSetViewports(1u, &viewport);
         context->OMSetRenderTargets(1u, &presenter->present_target_view, nullptr);
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context->VSSetShader(presenter->vrr_vs, nullptr, 0u);
-        context->PSSetShader(presenter->vrr_ps, nullptr, 0u);
-        context->PSSetSamplers(0u, 1u, &presenter->vrr_sampler);
-        context->PSSetShaderResources(0u, 1u, &presenter->vrr_source);
+        context->VSSetShader(presenter->output_vs, nullptr, 0u);
+        context->PSSetShader(presenter->output_ps, nullptr, 0u);
+        context->PSSetSamplers(0u, 1u, &presenter->output_sampler);
+        context->PSSetShaderResources(0u, 1u, &presenter->output_source);
         context->Draw(3u, 0u);
         context->ClearState();
     }

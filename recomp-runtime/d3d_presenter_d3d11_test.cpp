@@ -1818,6 +1818,24 @@ static bool testWidescreenClientWidth()
     return presentClientWidth(&presenter, 480u) == 640u;
 }
 
+static bool sameViewport(const D3D11_VIEWPORT &v, float x, float y, float w, float h)
+{
+    return v.TopLeftX == x && v.TopLeftY == y && v.Width == w && v.Height == h;
+}
+
+static bool testFitViewport()
+{
+    RecompD3dPresenter presenter{};
+    presenter.widescreen = true;
+    // Issue #45: 16:9 on a 16:10 screen letterboxes; 21:9 pillarboxes.
+    if (!sameViewport(fitViewport(&presenter, 1920u, 1200u), 0.0f, 60.0f, 1920.0f, 1080.0f)) return false;
+    if (!sameViewport(fitViewport(&presenter, 2560u, 1080u), 320.0f, 0.0f, 1920.0f, 1080.0f)) return false;
+    if (!sameViewport(fitViewport(&presenter, 854u, 480u), 0.0f, 0.0f, 854.0f, 480.0f)) return false;
+    presenter.widescreen = false;
+    return sameViewport(fitViewport(&presenter, 1920u, 1200u), 160.0f, 0.0f, 1600.0f, 1200.0f) &&
+        sameViewport(fitViewport(&presenter, 640u, 480u), 0.0f, 0.0f, 640.0f, 480.0f);
+}
+
 static bool testWidescreen2dSqueeze()
 {
     /* Observed DOA3 quads at 720 wide and 16:9: subtitle glyph, watermark,
@@ -2488,6 +2506,10 @@ int main()
     }
     if (!testWidescreenClientWidth()) {
         std::fprintf(stderr, "FAIL widescreen client width\n");
+        return 1;
+    }
+    if (!testFitViewport()) {
+        std::fprintf(stderr, "FAIL fit viewport\n");
         return 1;
     }
     if (!testWidescreen2dSqueeze()) {
