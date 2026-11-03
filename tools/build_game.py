@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Build the DOA3 runner from a user-owned ISO or extracted disc folder."""
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -251,20 +252,16 @@ def build(source, movies=True, extractor=None):
 
     work = ROOT / "private" / ("program-" + uuid.uuid4().hex[:8])
     work.mkdir(parents=True)
-    disasm, generated = work / "disasm", work / "generated"
+    generated = work / "generated"
     recipe = ROOT / "tools" / version["recipe"]
-    print(f"Lifting {xbe.name} takes several minutes.", flush=True)
-    analysis = work / "default_analysis.json"
-    run_logged([sys.executable, "-u", "-m", "tools.xbe_parser", xbe, "--json", analysis],
-               work / "xbe_parser.log", LIFTER)
-    run_logged([sys.executable, "-u", "-m", "tools.disasm", xbe, "-o", disasm,
-                "--analysis-json", analysis,
-                "--seed-functions", recipe / "seed_functions.json"],
-               work / "disasm.log", LIFTER)
-    # The missing func-id/ABI/icall paths keep the lifter to the recipe's inputs.
+    # The recipe's stored disassembly result spares every build about three minutes.
+    functions = work / "functions.json"
+    functions.write_bytes(gzip.decompress((recipe / "functions.json.gz").read_bytes()))
+    print(f"Lifting {xbe.name} takes a few minutes.", flush=True)
+    # The missing disasm/func-id/ABI/icall paths keep the lifter to the recipe's inputs.
     run_logged([sys.executable, "-u", "-m", "tools.recomp", xbe, "--all", "--split", "1000",
                 "--game-name", "Dead or Alive 3",
-                "--functions", disasm / "functions.json", "--labels", disasm / "labels.json",
+                "--functions", functions, "--disasm-dir", work / "none",
                 "--func-id-dir", work / "none", "--abi-dir", work / "none",
                 "--icall-sites", work / "none.json",
                 "--manual-functions", recipe / "manual_functions.json",
