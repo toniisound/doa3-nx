@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Faster builds** (#40). The build lifts from each disc's stored function
+  list instead of disassembling `default.xbe` again, which saves 3 to 5
+  minutes per build. The generated program is unchanged for both Japan 3.1
+  and USA 3.0.
+
 ## 0.6 — 2026-11-02
 
 Native 16:10 and ultrawide screens, and fullscreen that covers any screen.
