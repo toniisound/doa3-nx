@@ -35,9 +35,16 @@ were used; the empty paths keep stale lifter output out.
 `tools/build_game.py` skips the disassembly: it lifts from the recipe's stored
 `functions.json.gz` (`tools/doa3`, `tools/doa3-jp`) with no labels, which gives
 the same program. When the lifter pin or a seed list changes, disassemble as
-above and store the new list with
-`python -c "import gzip,sys; open(sys.argv[2],'wb').write(gzip.compress(open(sys.argv[1],'rb').read(),9,mtime=0))" <functions.json> tools/doa3/functions.json.gz`,
-then update its hash in `public-export.json`.
+above and store the new list, also from `tools/xboxrecomp`:
+
+```powershell
+python -c "import gzip, sys; open(sys.argv[2], 'wb').write(gzip.compress(open(sys.argv[1], 'rb').read(), 9, mtime=0))" `
+  ../../private/lift/disasm-seed/functions.json ../../tools/doa3/functions.json.gz
+```
+
+For Japan 3.1, disassemble the Japan XBE with `tools/doa3-jp/seed_functions.json`
+and write `../../tools/doa3-jp/functions.json.gz`. Then update the list's hash
+in `public-export.json`.
 
 | Result | Value |
 |---|---|
