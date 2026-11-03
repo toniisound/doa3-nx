@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-11-02
+
+Faster builds.
 
 ### Changed
 
