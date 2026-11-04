@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "d3d_presenter.h"
+#include "overlay_sdl_gpu.h"
+#include "screenshot.h"
 #include "d3d_draw_model.h"
 #include "d3d_texture_model.h"
 #include "d3d_vertex_program.h"
+#include "widescreen.h"
 
 #include <SDL3/SDL.h>
 
@@ -36,9 +39,9 @@ constexpr uint32_t kInitialIndexCapacity = 16u * 1024u * 1024u;  // 16 MB
 // TransformUniforms in floats: the header every draw pushes, then the
 // fixed-function lighting block. SDL's Vulkan backend binds 4 KB per uniform
 // slot, so vertex program constants live in their own slot.
-constexpr uint32_t kHeaderUniformFloats = 156u;  // ends with fog_params and fog_color
+constexpr uint32_t kHeaderUniformFloats = 160u;  // ends with fog_params, fog_color, texcoord_clamp
 constexpr uint32_t kLightingUniformFloats = kHeaderUniformFloats;
-constexpr uint32_t kTransformUniformFloats = 488u;
+constexpr uint32_t kTransformUniformFloats = 492u;
 constexpr uint32_t kProgramConstantFloats = 192u * 4u;
 constexpr uint32_t kNoProgramConstants = UINT32_MAX;
 
@@ -66,6 +69,7 @@ struct TransformUniforms {
     float4 light_stage;
     float4 fog_params;
     float4 fog_color;
+    float4 texcoord_clamp;
     float4x4 directional_normals[4];
     float4 directional_base;
     float4 directional_material;
@@ -243,6 +247,7 @@ struct QueuedDraw {
     uint32_t index_offset = 0;
     uint32_t index_size = 0;
     uint32_t index_count = 0;
+    int32_t base_vertex = 0;
     SDL_GPUTexture *texture = nullptr;
     SDL_GPUTexture *mask_texture = nullptr;
     SDL_GPUSampler *sampler0 = nullptr;
@@ -420,6 +425,7 @@ struct RecompD3dPresenter {
 
     float scale = 1.0f;
     bool widescreen = false;
+    uint32_t aspect_w = 16u, aspect_h = 9u; // widescreen shape, from RECOMP_D3D_WIDESCREEN
 
     // SetGammaRamp applies when a frame is shown; guest reads stay uncorrected.
     bool gamma_enabled = false;
@@ -442,7 +448,7 @@ inline uint32_t mainHeight(const RecompD3dPresenter *p) {
 
 inline uint32_t presentClientWidth(const RecompD3dPresenter *p, uint32_t height) {
     return static_cast<uint32_t>(p->widescreen
-        ? (height * 16u + 8u) / 9u
+        ? (height * p->aspect_w + p->aspect_h - 1u) / p->aspect_h
         : (height * 4u + 1u) / 3u);
 }
 
@@ -452,12 +458,11 @@ inline uint32_t mainWidth(const RecompD3dPresenter *p) {
         : presentClientWidth(p, mainHeight(p));
 }
 
-/* As in the D3D11 presenter: DOA3 widens only its 3D view and movies at
-   16:9, while HUD, menu and subtitle quads keep 4:3 positions. A screen-space
-   quad narrower than the centered 4:3 window is that 2D layer and is narrowed
-   by 3/4 about the screen center; full-width fades and backdrops are kept. */
-inline bool squeezeWidescreen2d(float left, float right, float width) {
-    return left > width / 8.0f + 1.0f || right < width * 7.0f / 8.0f - 1.0f;
+inline RecompWidescreen2dScale widescreen2dScale(const RecompD3dPresenter *p,
+    float left, float right, float top, float bottom) {
+    return recomp_widescreen_2d_scale(static_cast<float>(p->config.width),
+        static_cast<float>(p->config.height), p->aspect_w, p->aspect_h,
+        left, right, top, bottom);
 }
 
 namespace {
@@ -1175,14 +1180,16 @@ std::string buildMslShader(const RecompD3dVertexLayout &layout, uint32_t fvf,
         s += "    out.reflection_coord = float2(0.0);\n";
         if (has_texcoord && !layout.pretransformed) {
             if (has_normal) {
-                s += "    if (u.reflection_flags.x > 1.5) {\n";
+                s += "    if (u.reflection_flags.x == 2.0) {\n";
                 s += "        out.reflection_coord = in.texcoord;\n";
                 s += "    } else if (u.reflection_flags.x > 0.5) {\n";
                 s += "        float3 eye = (u.reflection_world_view * float4(in.position, 1.0)).xyz;\n";
                 s += "        float3 n = (u.reflection_normal * float4(in.normal, 0.0)).xyz;\n";
                 s += "        if (u.reflection_flags.y > 0.5) n = normalize(n);\n";
                 s += "        float3 r = reflect(normalize(eye), n);\n";
-                s += "        out.reflection_coord = (u.reflection_transform * float4(r, 1.0)).xy;\n";
+                s += "        float2 coord = (u.reflection_transform * float4(r, 1.0)).xy;\n";
+                s += "        if (u.reflection_flags.x == 3.0) out.texcoord = coord;\n";
+                s += "        else out.reflection_coord = coord;\n";
                 s += "    }\n";
             } else {
                 s += "    if (u.reflection_flags.x > 1.5) {\n";
@@ -1219,7 +1226,7 @@ std::string buildMslShader(const RecompD3dVertexLayout &layout, uint32_t fvf,
         s += "    if (u.reflection_flags.z > 0.5) in.reflection_coord /= in.program_q.y;\n";
     }
     s += "    float4 shaded = in.color;\n";
-    s += "    if (u.reflection_flags.x > 0.5) {\n";
+    s += "    if (u.reflection_flags.x > 0.5 && u.reflection_flags.x < 2.5) {\n";
     s += "        float4 base = guest_texture.sample(guest_sampler, in.texcoord);\n";
     s += "        base.a *= u.reflection_diffuse.a;\n";
     s += "        float4 env = alpha_mask.sample(guest_sampler, in.reflection_coord);\n";
@@ -1245,7 +1252,8 @@ std::string buildMslShader(const RecompD3dVertexLayout &layout, uint32_t fvf,
     s += "    if (u.blend_flags.y == 1.0) {\n";
     s += "        shaded = u.texture_factor;\n";
     s += "    } else if (u.draw_flags.x > 0.5) {\n";
-    s += "        float4 sampled = guest_texture.sample(guest_sampler, in.texcoord * u.texture_flags.xy);\n";
+    s += "        float4 sampled = guest_texture.sample(guest_sampler,\n";
+    s += "            clamp(in.texcoord, u.texcoord_clamp.xy, u.texcoord_clamp.zw) * u.texture_flags.xy);\n";
     s += "        if (u.lighting_flags.y > 0.5) sampled.rgb = float3(1.0);\n";
     s += has_diffuse ? "        shaded *= sampled;\n" : "        shaded = sampled;\n";
     // Stage 0 combines the texture and lit diffuse as the guest's color and alpha ops select.
@@ -1301,6 +1309,7 @@ layout(set = 1, binding = 0, std140) uniform TransformUniforms {
     vec4 light_stage;
     vec4 fog_params;
     vec4 fog_color;
+    vec4 texcoord_clamp;
     mat4 directional_normals[4];
     vec4 directional_base;
     vec4 directional_material;
@@ -1332,6 +1341,7 @@ layout(set = 3, binding = 0, std140) uniform TransformUniforms {
     vec4 light_stage;
     vec4 fog_params;
     vec4 fog_color;
+    vec4 texcoord_clamp;
     mat4 directional_normals[4];
     vec4 directional_base;
     vec4 directional_material;
@@ -1513,14 +1523,16 @@ std::string buildGlslVertexShader(const RecompD3dVertexLayout &layout, uint32_t 
         s += "    v_reflection_coord = vec2(0.0);\n";
         if (has_texcoord && !layout.pretransformed) {
             if (has_normal) {
-                s += "    if (u.reflection_flags.x > 1.5) {\n";
+                s += "    if (u.reflection_flags.x == 2.0) {\n";
                 s += "        v_reflection_coord = in_texcoord;\n";
                 s += "    } else if (u.reflection_flags.x > 0.5) {\n";
                 s += "        vec3 eye = (u.reflection_world_view * vec4(in_position, 1.0)).xyz;\n";
                 s += "        vec3 n = (u.reflection_normal * vec4(in_normal, 0.0)).xyz;\n";
                 s += "        if (u.reflection_flags.y > 0.5) n = normalize(n);\n";
                 s += "        vec3 r = reflect(normalize(eye), n);\n";
-                s += "        v_reflection_coord = (u.reflection_transform * vec4(r, 1.0)).xy;\n";
+                s += "        vec2 coord = (u.reflection_transform * vec4(r, 1.0)).xy;\n";
+                s += "        if (u.reflection_flags.x == 3.0) v_texcoord = coord;\n";
+                s += "        else v_reflection_coord = coord;\n";
                 s += "    }\n";
             } else {
                 s += "    if (u.reflection_flags.x > 1.5) {\n";
@@ -1582,7 +1594,7 @@ std::string buildGlslFragmentShader(const RecompD3dVertexLayout &layout, uint32_
         s += "    if (u.reflection_flags.z > 0.5) refl_tc /= v_program_q.y;\n";
     }
     s += "    vec4 shaded = v_color;\n";
-    s += "    if (u.reflection_flags.x > 0.5) {\n";
+    s += "    if (u.reflection_flags.x > 0.5 && u.reflection_flags.x < 2.5) {\n";
     s += "        vec4 base = texture(guest_texture, tc);\n";
     s += "        base.a *= u.reflection_diffuse.a;\n";
     s += "        vec4 env = texture(alpha_mask, refl_tc);\n";
@@ -1608,7 +1620,8 @@ std::string buildGlslFragmentShader(const RecompD3dVertexLayout &layout, uint32_
     s += "    if (u.blend_flags.y == 1.0) {\n";
     s += "        shaded = u.texture_factor;\n";
     s += "    } else if (u.draw_flags.x > 0.5) {\n";
-    s += "        vec4 sampled = texture(guest_texture, tc * u.texture_flags.xy);\n";
+    s += "        vec4 sampled = texture(guest_texture,\n";
+    s += "            clamp(tc, u.texcoord_clamp.xy, u.texcoord_clamp.zw) * u.texture_flags.xy);\n";
     s += "        if (u.lighting_flags.y > 0.5) sampled.rgb = vec3(1.0);\n";
     s += has_diffuse ? "        shaded *= sampled;\n" : "        shaded = sampled;\n";
     // Stage 0 combines the texture and lit diffuse as the guest's color and alpha ops select.
@@ -2329,7 +2342,7 @@ void flushSegment(RecompD3dPresenter *presenter)
                 last_stencil_ref = q.stencil_ref;
             }
 
-            SDL_DrawGPUIndexedPrimitives(rpass, q.index_count, 1, 0, 0, 0);
+            SDL_DrawGPUIndexedPrimitives(rpass, q.index_count, 1, 0, q.base_vertex, 0);
         }
         SDL_EndGPURenderPass(rpass);
     }
@@ -2345,6 +2358,38 @@ void flushSegment(RecompD3dPresenter *presenter)
 }
 
 } // namespace
+
+// Saves the game's frame as shown (after gamma), without the overlay drawn on
+// the window, and submits the command buffer. The download waits for the GPU,
+// so only a requested screenshot pays for it.
+static void saveScreenshot(RecompD3dPresenter *presenter, SDL_GPUCommandBuffer *cmdbuf, SDL_GPUTexture *frame) {
+    const uint32_t w = mainWidth(presenter), h = mainHeight(presenter);
+    SDL_GPUTransferBufferCreateInfo info{SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, w * h * 4u, 0};
+    SDL_GPUTransferBuffer *buffer = SDL_CreateGPUTransferBuffer(presenter->device, &info);
+    if (buffer == nullptr) {
+        std::fprintf(stderr, "recomp screenshot: %s\n", SDL_GetError());
+        SDL_SubmitGPUCommandBuffer(cmdbuf);
+        return;
+    }
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmdbuf);
+    SDL_GPUTextureRegion source{frame, 0, 0, 0, 0, 0, w, h, 1};
+    SDL_GPUTextureTransferInfo destination{buffer, 0, w, h};
+    SDL_DownloadFromGPUTexture(copy, &source, &destination);
+    SDL_EndGPUCopyPass(copy);
+    SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmdbuf);
+    bool saved = false;
+    if (fence != nullptr) {
+        SDL_WaitForGPUFences(presenter->device, true, &fence, 1);
+        SDL_ReleaseGPUFence(presenter->device, fence);
+        if (void *pixels = SDL_MapGPUTransferBuffer(presenter->device, buffer, false)) {
+            recomp_screenshot_save(static_cast<const uint8_t *>(pixels), w, h, w * 4u);
+            saved = true;
+            SDL_UnmapGPUTransferBuffer(presenter->device, buffer);
+        }
+    }
+    if (!saved) std::fprintf(stderr, "recomp screenshot: %s\n", SDL_GetError());
+    SDL_ReleaseGPUTransferBuffer(presenter->device, buffer);
+}
 
 extern "C" {
 
@@ -2384,14 +2429,15 @@ RecompD3dPresenterError recomp_d3d_presenter_create(
             scale = std::clamp(val, 1.0f, 8.0f);
         }
     }
-    const char *widescreen_env = std::getenv("RECOMP_D3D_WIDESCREEN");
-    /* DOA3 renders 4:3 unless RECOMP_D3D_WIDESCREEN=1 sets the Xbox widescreen flag. */
-    const bool widescreen = widescreen_env != nullptr && std::strcmp(widescreen_env, "0") != 0;
+    /* DOA3 renders 4:3 unless RECOMP_D3D_WIDESCREEN sets the Xbox widescreen flag. */
+    unsigned aspect_w = 16u, aspect_h = 9u;
+    const bool widescreen = recomp_widescreen(&aspect_w, &aspect_h);
 
     const uint32_t main_h = static_cast<uint32_t>(config->height * scale + 0.5f);
     // The window shows the display aspect; at scale 1 the main target keeps
     // the guest width, anamorphic when widescreen.
-    const uint32_t display_w = widescreen ? (main_h * 16u + 8u) / 9u : (main_h * 4u + 1u) / 3u;
+    const uint32_t display_w = widescreen
+        ? (main_h * aspect_w + aspect_h - 1u) / aspect_h : (main_h * 4u + 1u) / 3u;
     const uint32_t main_w = scale == 1.0f ? config->width : display_w;
 
     uint32_t win_w = display_w;
@@ -2653,6 +2699,8 @@ RecompD3dPresenterError recomp_d3d_presenter_create(
     p->config = *config;
     p->scale = scale;
     p->widescreen = widescreen;
+    p->aspect_w = aspect_w;
+    p->aspect_h = aspect_h;
     p->use_spirv = (SDL_GetGPUShaderFormats(device) & SDL_GPU_SHADERFORMAT_SPIRV) != 0;
     p->owner_thread = std::this_thread::get_id();
     const char *performance = std::getenv("RECOMP_PERF_COUNTER");
@@ -2829,6 +2877,13 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
                 blit.clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
                 blit.filter = SDL_GPU_FILTER_LINEAR;
                 SDL_BlitGPUTexture(cmdbuf, &blit);
+                // The runtime's overlay text goes on the window, not the
+                // game's back buffer, which the game reads back as its front
+                // buffer.
+                RecompOverlayText overlay;
+                recomp_overlay_take(&overlay);
+                recomp_overlay_sdl_gpu_draw(presenter->device, presenter->window, cmdbuf,
+                    swapchain_tex, swap_w, swap_h, &overlay);
             }
         }
 
@@ -2879,6 +2934,8 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
                 }
             }
             SDL_ReleaseGPUTransferBuffer(presenter->device, dump);
+        } else if (recomp_screenshot_take_request()) {
+            saveScreenshot(presenter, cmdbuf, shown);
         } else {
             SDL_SubmitGPUCommandBuffer(cmdbuf);
         }
@@ -3046,20 +3103,22 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
             constants[14] = 0.0f;
             constants[15] = 1.0f;
             if (presenter->widescreen && !draw.program_count && !draw.target.offscreen) {
-                float left = INFINITY, right = -INFINITY;
+                float left = INFINITY, right = -INFINITY, top = INFINITY, bottom = -INFINITY;
                 for (uint32_t i = 0u; i < draw.vertex_count; ++i) {
-                    float x;
-                    std::memcpy(&x, static_cast<const uint8_t *>(draw.vertex_bytes) +
-                        i * draw.vertex_stride, sizeof x);
-                    if (!std::isfinite(x)) continue;
-                    left = std::min(left, x);
-                    right = std::max(right, x);
+                    float xy[2];
+                    std::memcpy(xy, static_cast<const uint8_t *>(draw.vertex_bytes) +
+                        i * draw.vertex_stride, sizeof xy);
+                    if (!std::isfinite(xy[0]) || !std::isfinite(xy[1])) continue;
+                    left = std::min(left, xy[0]);
+                    right = std::max(right, xy[0]);
+                    top = std::min(top, xy[1]);
+                    bottom = std::max(bottom, xy[1]);
                 }
-                const float width = static_cast<float>(presenter->config.width);
-                if (squeezeWidescreen2d(left, right, width)) {
-                    constants[12] += constants[0] * 0.125f * width;
-                    constants[0] *= 0.75f;
-                }
+                const auto scale = widescreen2dScale(presenter, left, right, top, bottom);
+                constants[12] += constants[0] * 0.5f * (1.0f - scale.x) * presenter->config.width;
+                constants[0] *= scale.x;
+                constants[13] += constants[5] * 0.5f * (1.0f - scale.y) * presenter->config.height;
+                constants[5] *= scale.y;
             }
         }
 
@@ -3101,12 +3160,15 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
             std::memcpy(constants + 144, light.stage, sizeof(light.stage));
         }
         if (draw.fog.mode != 0u && !draw.program_count) {
-            float *fog = constants + kHeaderUniformFloats - 8u;  // fog_params, fog_color
+            float *fog = constants + kHeaderUniformFloats - 12u;  // fog_params, fog_color
             fog[0] = static_cast<float>(draw.fog.mode);
             fog[1] = draw.fog.mode == 1u ? draw.fog.end : draw.fog.density;
             fog[2] = draw.fog.mode == 1u ? 1.0f / (draw.fog.end - draw.fog.start) : 0.0f;
             std::memcpy(fog + 4, draw.fog.color, sizeof draw.fog.color);
         }
+        recomp_d3d_quad_texcoord_clamp(draw.vertex_bytes, draw.vertex_stride,
+            layout.pretransformed ? draw.vertex_count : 0u, layout.texcoord_offset,
+            constants + kHeaderUniformFloats - 4u);
 
         constants[64] = (texture != nullptr) ? 1.0f : 0.0f;
         constants[65] = draw.depth.alpha_test_enable ? 1.0f : 0.0f;
@@ -3131,12 +3193,12 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
         constants[82] = draw.four_tap_filter ? 1.0f : 0.0f;
         constants[83] = draw.has_alpha_mask ? 1.0f : 0.0f;
 
-        if (draw.has_reflection) {
+        if (draw.has_reflection || draw.reflection_texgen) {
             std::memcpy(constants + 84, draw.reflection_world_view, 64u);
             std::memcpy(constants + 100, draw.reflection_normal, 64u);
             std::memcpy(constants + 116, draw.reflection_transform, 64u);
             std::memcpy(constants + 132, draw.reflection_diffuse, 16u);
-            constants[136] = draw.reflection_mesh_uv ? 2.0f : 1.0f;
+            constants[136] = draw.reflection_texgen ? 3.0f : draw.reflection_mesh_uv ? 2.0f : 1.0f;
             constants[137] = draw.reflection_normalize ? 1.0f : 0.0f;
         }
 
@@ -3178,6 +3240,7 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
         q.index_offset = i_offset;
         q.index_size = i_size;
         q.index_count = queued_index_count;
+        q.base_vertex = -static_cast<int32_t>(draw.first_vertex);
         q.texture = texture;
         q.mask_texture = mask_texture;
         q.sampler0 = s0;
@@ -3204,6 +3267,16 @@ RecompD3dPresenterError recomp_d3d_presenter_submit(
             q.viewport = {draw.viewport[0] * scale_x, draw.viewport[1] * scale_y,
                 draw.viewport[2] * scale_x, draw.viewport[3] * scale_y,
                 draw.viewport[4], draw.viewport[5]};
+            /* The portrait sits in a 2D frame that widescreen narrows to 4:3, so
+               its viewport narrows the same way about the screen center. */
+            const float width = static_cast<float>(presenter->config.width);
+            if (presenter->widescreen && !draw.target.offscreen) {
+                const float squeeze = widescreen2dScale(presenter, draw.viewport[0],
+                    draw.viewport[0] + draw.viewport[2], draw.viewport[1],
+                    draw.viewport[1] + draw.viewport[3]).x;
+                q.viewport.x = (squeeze * draw.viewport[0] + 0.5f * (1.0f - squeeze) * width) * scale_x;
+                q.viewport.w *= squeeze;
+            }
         }
         q.stencil_ref = static_cast<uint8_t>(draw.depth.stencil_ref);
         q.uniform_offset = uniform_offset;
@@ -3364,6 +3437,7 @@ RecompD3dPresenterError recomp_d3d_presenter_destroy(
             }
         }
     }
+    recomp_overlay_sdl_gpu_shutdown();
     if (p->filter_sampler) SDL_ReleaseGPUSampler(p->device, p->filter_sampler);
     if (p->point_sampler) SDL_ReleaseGPUSampler(p->device, p->point_sampler);
     if (p->program_mask_sampler) SDL_ReleaseGPUSampler(p->device, p->program_mask_sampler);

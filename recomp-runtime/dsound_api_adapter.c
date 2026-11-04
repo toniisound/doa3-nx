@@ -2,6 +2,7 @@
 #include "dsound_service_model.h"
 #include "dsound_hrtf.h"
 #include "audio_output.h"
+#include "doa3_build.h"
 #include "xbox_adpcm.h"
 #include "kernel_abi.h"
 #include "stop_report.h"
@@ -53,6 +54,11 @@ enum {
     BUF_PLAY = 0x001c7b33u,                   /* (b, r1, r2, flags) */
     BUF_STOP = 0x001c7b57u,                   /* (b) */
     BUF_SET_BUFFER_DATA = 0x001c7b6fu,        /* (b, pv, bytes) */
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    /* DSOUND 4134 only; CRI mwSndOpenPort calls it after CreateSoundBuffer.
+       Keyed by its Japan address. */
+    BUF_SET_HEADROOM = 0x001f1da5u,           /* (b, headroom) */
+#endif
 
     /* Handles live in unmapped guest space, so any direct guest access to a
        DirectSound object stops loudly at a recognisable address. */
@@ -66,10 +72,11 @@ enum {
     DSBSTATUS_PLAYING = 1u,
     DSBSTATUS_LOOPING = 4u,
 
-    /* DSOUND 3936 full HRTF response bank and [61][31] index map. */
-    HRTF_BANK = 0x001cee88u,
+    /* DSOUND full HRTF response bank and [61][31] index map; Japan 4134
+       carries the same bytes. */
+    HRTF_BANK = DOA3(0x001cee88u, 0x001f9660u),
     HRTF_BANK_SIZE = 0x115c0u,
-    HRTF_MAP = 0x001e0448u,
+    HRTF_MAP = DOA3(0x001e0448u, 0x0020ac20u),
     HRTF_MAP_SIZE = 0xec6u,
 };
 
@@ -766,8 +773,27 @@ static void min_distance(void)
     ok_3();
 }
 
+#ifdef RECOMP_DOA3_JP_BINDINGS
+/* 4134 CDirectSoundVoice_SetHeadroom: trade the old headroom for the new one. */
+static void buffer_set_headroom(void)
+{
+    Buffer *buffer = buffer_at(kernel_arg(1u));
+    int32_t headroom = (int32_t)kernel_arg(2u);
+    pump_buffer(buffer, now_ms());
+    buffer->volume += buffer->headroom - headroom;
+    buffer->headroom = headroom;
+    kernel_return(2u, RECOMP_DSOUND_OK);
+}
+#endif
+
 static void mix_bin_volumes(void)
 {
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    /* DSOUND 4134: (b, LPCDSMIXBINS), ret 8. */
+    if (tracing()) fprintf(stderr, "recomp audio: mix-bin-volumes target=0x%08x bins=0x%08x\n",
+        kernel_arg(1u), kernel_arg(2u));
+    ok_2();
+#else
     if (tracing()) {
         uint32_t mask = kernel_arg(2u), volumes = kernel_arg(3u);
         fprintf(stderr, "recomp audio: mix-bin-volumes target=0x%08x mask=0x%x", kernel_arg(1u), mask);
@@ -777,6 +803,7 @@ static void mix_bin_volumes(void)
         fputc('\n', stderr);
     }
     ok_3();
+#endif
 }
 
 static void mix_bins(void)
@@ -817,6 +844,9 @@ SERIALIZED(min_distance)
 SERIALIZED(voice_position)
 SERIALIZED(mix_bin_volumes)
 SERIALIZED(mix_bins)
+#ifdef RECOMP_DOA3_JP_BINDINGS
+SERIALIZED(buffer_set_headroom)
+#endif
 
 RecompFunction recomp_dsound_api_lookup_manual(uint32_t guest_address)
 {
@@ -850,6 +880,9 @@ RecompFunction recomp_dsound_api_lookup_manual(uint32_t guest_address)
     case BUF_PLAY: return buffer_play_locked;
     case BUF_STOP: return buffer_stop_locked;
     case BUF_SET_BUFFER_DATA: return buffer_set_data_locked;
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    case BUF_SET_HEADROOM: return buffer_set_headroom_locked;
+#endif
     default: return NULL;
     }
 }

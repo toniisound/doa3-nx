@@ -10,6 +10,7 @@
 #include "program_manual.h"
 #include "stop_report.h"
 #include "cri_adxm_adapter.h"
+#include "free_camera_adapter.h"
 
 #include <inttypes.h>
 
@@ -96,8 +97,8 @@ void sub_0016A650(void) { recomp_program_manual_call(0x0016a650u); }
 
 /* CRI ADXF_GetPtStat (0x00169150) and ADXF_GetStat (0x00168DE0), which the
    game polls without yielding. The ADXM server threads that complete reads
-   never run here, so each poll first runs one server pass, then the generated
-   status body. */
+   never run here, so each poll first runs server passes until they stop
+   reading, then the generated status body. */
 extern void sub_00169150_gen(void);
 void sub_00169150(void)
 {
@@ -154,3 +155,10 @@ void sub_000A40E0(void) { recomp_program_manual_call(0x000a40e0u); }
 
 /* Hand-written DOA3 auto-save, bracketed by the save journal (save_adapter.c). */
 void sub_00021930(void) { recomp_program_manual_call(0x00021930u); }
+
+/* Game code wrapped, not replaced: the lifter emits the body as sub_X_gen
+   (it reads the extern below) and sends every call to sub_X here.
+   0x0002A540 builds a camera object's view and projection; the free camera
+   puts its eye, target and field of view in first (free_camera_adapter.c). */
+extern void sub_0002A540_gen(void);
+void sub_0002A540(void) { recomp_free_camera_build(sub_0002A540_gen); }

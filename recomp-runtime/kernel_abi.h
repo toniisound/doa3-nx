@@ -86,6 +86,8 @@ bool recomp_kernel_save_handles_closed(uint32_t owner);
 void recomp_kernel_release_profile_handles(void);
 /* File close model shared by the import bridge and ownership checks. */
 uint32_t recomp_kernel_close_file(uint32_t guest_handle, uint32_t owner);
+/* Count of NtReadFile calls so far; a caller compares two readings. */
+uint32_t recomp_kernel_read_count(void);
 /* Rewrites bytes after each guest read of a handle; offset is the file offset
    of bytes[0]. The host file is never written. */
 typedef void (*RecompReadFilter)(uint64_t offset, uint8_t *bytes, uint32_t count);

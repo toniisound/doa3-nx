@@ -2,16 +2,16 @@
 
 # DOA3 Native PC Port
 
-**A native Windows, macOS and Linux port of _Dead or Alive 3_, built by static recompilation, with the goal of rewriting it into readable source.**
+**A native PC port of _Dead or Alive 3_ (Windows, macOS & Linux), built by static recompilation, with the goal of rewriting it into readable source.**
 
 [![CI](https://github.com/NoRain211/doa3-re/actions/workflows/public-ci.yml/badge.svg)](https://github.com/NoRain211/doa3-re/actions/workflows/public-ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
-![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6)
-![Platform: macOS](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20x64-000000)
-![Platform: Linux x64](https://img.shields.io/badge/platform-Linux%20%7C%20SteamOS%20x64-FCC624)
+![Platform: Windows, macOS & Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D6)
 
 [Status](docs/bring-up.md) ·
 [Report a bug](https://github.com/NoRain211/doa3-re/issues)
+
+<a href="https://discord.gg/dUdgUF4A"><img src="https://img.shields.io/badge/Join%20the%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the Discord" height="30"></a>
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/norainsrecomps)
 
@@ -19,8 +19,8 @@
 
 > [!IMPORTANT]
 > This project ships **no game files**. You need your own legally obtained copy
-> of the USA Xbox release. It is not affiliated with or endorsed by the game's
-> rights holders.
+> of the Xbox game: the **Japan 3.1** disc, the main build, or the USA 3.0
+> disc. It is not affiliated with or endorsed by the game's rights holders.
 
 ## About
 
@@ -47,6 +47,12 @@ the same approach.
 > for how the port got here, and [runtime options](docs/runtime-options.md)
 > for settings and runner flags.
 
+The main build is the Japan 3.1 disc (XDK 4134), with 3.1's moves, balance
+and costumes; the USA 3.0 disc still builds. `tools/build_game.py` and the
+launcher tell them apart by `default.xbe`, keep each in its own extraction and
+play folder (so saves never mix), and the launcher shows which one is
+installed. Japan specifics are in [Japan 3.1](docs/doa3-jp-test.md).
+
 | Area | State |
 | --- | --- |
 | Whole-program lift | Runs from boot to fights, paced to 60 Hz |
@@ -56,6 +62,41 @@ the same approach.
 | macOS and Linux | Native builds; see [building on macOS and Linux](docs/building.md) |
 | CRI Sofdec movies | Play natively |
 | Hand-written game logic | Stage boundary and danger-zone collision |
+| DOAXBV swimsuits | Every DOA3 woman can wear her DOAXBV swimsuits, switched live in a fight, built from your own DOAXBV disc |
+| Free camera | Take the game's camera and fly it through fights and cutscenes, freeze and step the game, hide the HUD, change swimsuits (with your DOAXBV disc) and save screenshots; see [Free camera](docs/free-camera.md) |
+
+### DOAXBV swimsuits
+
+With your own _Dead or Alive Xtreme Beach Volleyball_ disc (an `.iso` or its
+extracted folder), Kasumi, Ayane, Christie, Tina, Hitomi, Helena and Lei Fang
+can each wear any of her 307 DOAXBV swimsuits. They keep their DOA3 heads,
+hair and moves; the suit is built on the fly from your disc, and skirts swing
+and clear the legs, and tassels swing, with DOAXBV's own cloth motion. In a fight, click
+**L3** (the left stick) on any controller to open the swimsuit menu (click
+again to close): its left half dresses P1
+and its right half P2. **LB** / **LT** and **RB** / **RT** change the
+swimsuits (hold to scroll), **X** / **B** mark a favorite (saved per girl),
+and **Y** browses only favorites. A panel lists the controls
+while the menu is open, and the keyboard's **1** / **2** switch too. Works on
+Japan 3.1 and USA 3.0. The game finds
+a DOAXBV `.iso` or extracted folder in `private/` (or in a `doaxbv-re`
+checkout beside this one); otherwise choose or drop it in the launcher (steps
+in [Getting the swimsuits](docs/doaxbv-swimsuits.md#getting-the-swimsuits)). The
+suit recipes (`recipes/doaxbv-suits.pack.gz`) ship with the
+port; no DOAXBV data does. See
+[DOAXBV swimsuits](docs/doaxbv-swimsuits.md).
+
+### Free camera
+
+Tick **Free camera** in the launcher, then in a fight or cutscene press
+**F1** or click the right stick to take the game's camera and fly it: the
+sticks or **WASD** and the arrow keys move and look, the triggers or **Q** /
+**E** go down and up. **Start** or **P** freezes the game and the right
+shoulder or **.** steps it a frame, the left shoulder or **H** hides the
+HUD, and the d-pad's left or **\\** turns to a fighter whose swimsuit the
+d-pad's up and down change. **F12**, or the d-pad's right while flying,
+saves a screenshot to `DOA3` in your Pictures folder. It works on both
+Japan 3.1 and USA 3.0. No control uses Back, which DOA3 acts on first. See [Free camera](docs/free-camera.md).
 
 `recomp-runtime/` started from doaxbv-re at `f6ad13e`. Its DOAXBV address
 bindings are gated off; DOA3's D3D8, DirectSound, XAPI and CRI functions are
@@ -103,10 +144,17 @@ python tools/xbe_info.py private/imported-disc/disc/default.xbe
 Download the ZIP from the latest
 [release](https://github.com/NoRain211/doa3-re/releases/latest) and extract it
 to a folder with a short path. Drag a DOA3 ISO or extracted disc folder onto
-`BuildGame.cmd`, then run
-`Launcher.cmd` to pick resolution, anti-aliasing, widescreen and volume and
-play, or `Play.cmd` to play with the current settings; see
-[docs/test-release.md](docs/test-release.md). On macOS and Linux, run
+`Launcher.exe`, or choose it on the launcher's **BUILD GAME** page, to build
+the game; **START GAME**
+plays with the resolution, anti-aliasing, widescreen and volume you pick; see
+[docs/test-release.md](docs/test-release.md). After that, `DOA3.exe` starts
+the game with those settings. In a checkout,
+`python tools/package_test.py --launchers .` builds both exes. On Windows the build needs
+Python 3.12+, CMake 3.20+ and Visual Studio's C++
+tools; if no Visual Studio C++ tools are installed, the build installs the
+Visual Studio 2022 Build Tools first (several GB, after a Windows prompt).
+On macOS and Linux, extract the release's
+`DOA3-<version>-macOS.tar.gz` or `DOA3-<version>-Linux.tar.gz` and run
 `./build_game.sh` with your ISO, then `./launcher.sh` or `./run_game.sh`; see
 [docs/building.md](docs/building.md). The game keeps its cache and
 saves in `private/play-disc` and each session's log in `private/play-logs`.

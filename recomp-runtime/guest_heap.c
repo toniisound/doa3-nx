@@ -23,6 +23,20 @@ bool xbox_HeapSetImageEnd(uint32_t image_end)
     return true;
 }
 
+/* Top-down from the page-aligned free RAM after the XBE, below kernel data. */
+static uint32_t image_gap_alloc(
+    uint64_t size, uint64_t upper_bound, uint32_t lowest_address, uint32_t alignment)
+{
+    uint64_t base;
+
+    if (upper_bound > image_gap_cursor) upper_bound = image_gap_cursor;
+    if (size > upper_bound) return 0u;
+    base = (upper_bound - size) & ~(uint64_t)(alignment - 1u);
+    if (base < lowest_address || base < image_gap_floor) return 0u;
+    image_gap_cursor = (uint32_t)base;
+    return (uint32_t)base;
+}
+
 uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
 {
     uint64_t aligned;
@@ -34,7 +48,10 @@ uint32_t xbox_HeapAlloc(uint32_t size, uint32_t alignment)
     aligned = ((uint64_t)heap_cursor + alignment - 1u) & ~(uint64_t)(alignment - 1u);
     end = aligned + size;
     if (end > XBOX_HEAP_LIMIT || end > contiguous_cursor) {
-        return 0u;
+        /* Contiguous memory can reach the heap first; whichever arena fills
+           last may use the gap. shortcut: xbox_HeapRestore does not reclaim
+           gap allocations, which only failed-creation rollbacks would need. */
+        return image_gap_alloc(size, XBOX_KERNEL_DATA_BASE, 0u, alignment);
     }
     heap_cursor = (uint32_t)end;
     return (uint32_t)aligned;
@@ -93,12 +110,9 @@ uint32_t xbox_ContiguousAlloc(
     if (base < lowest_address || base < heap_cursor) {
         /* The fixed 16 MiB heap base must not hide free RAM after the XBE.
            Keep the separate kernel data block outside both allocation arenas. */
-        upper_bound = (uint64_t)highest_address + 1u;
-        if (upper_bound > image_gap_cursor) upper_bound = image_gap_cursor;
-        if (rounded_size > upper_bound) return 0u;
-        base = (upper_bound - rounded_size) & ~(uint64_t)(alignment - 1u);
-        if (base < lowest_address || base < image_gap_floor) return 0u;
-        image_gap_cursor = (uint32_t)base;
+        base = image_gap_alloc(rounded_size, (uint64_t)highest_address + 1u,
+            lowest_address, alignment);
+        if (base == 0u) return 0u;
     } else {
         contiguous_cursor = (uint32_t)base;
     }

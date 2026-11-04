@@ -1,8 +1,179 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-11-02
+
+Faster builds.
+
+### Changed
+
+- **Faster builds** (#40). The build lifts from each disc's stored function
+  list instead of disassembling `default.xbe` again, which saves 3 to 5
+  minutes per build. The generated program is unchanged for both Japan 3.1
+  and USA 3.0.
+
+## 0.6 — 2026-11-02
+
+Native 16:10 and ultrawide screens, and fullscreen that covers any screen.
 
 ### Added
+
+- **16:10 and ultrawide screens** (#45). The launcher's Screen setting adds
+  16:10 and Ultrawide (the primary monitor's own shape, such as 21:9 or 32:9,
+  up to 4:1; 21:9 on a narrower monitor), which the game renders natively:
+  its projection and fight camera take the shape, the HUD and menus keep
+  their 4:3 shape, and movies keep the film's shape. Wider than 16:9, the
+  fight camera keeps its 16:9 framing and the view widens around it.
+
+### Fixed
+
+- **Fullscreen on other screen shapes** (#45). On Windows above 480p, the
+  game window covers the whole screen instead of leaving the desktop showing
+  below or beside it. A screen of another shape than the chosen one gets
+  black bars.
+- **Japan 3.1 movies in widescreen** keep the film's shape instead of
+  stretching.
+
+## 0.5 — 2026-11-01
+
+Windows builds without Visual Studio, and one beach launcher on every
+platform.
+
+### Changed
+
+- **Windows builds without Visual Studio.** The build downloads the pinned
+  [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20261006 (Clang 23,
+  the same compiler as the DOAXBV and DOA2U ports) and CMake 4.4.5 (245 MB,
+  each checked against its SHA-256) into `private/` on its first run instead
+  of installing the Visual Studio 2022 Build Tools, so Python is the only
+  thing to install. The first 0.5 upload used w64devkit's GCC instead.
+  The runner moves to `build/recomp-program/recomp_program_runner.exe`;
+  rebuild once after updating. Visual Studio 2022 remains an optional way to
+  build the runtime and its tests.
+- **Beach launcher.** The Windows, Linux and macOS launchers share one look:
+  a sunset beach between letterbox bars, with page tabs and the chosen page's
+  settings side by side in the bottom bar. Left and right move between pages
+  and settings. Down opens a page; inside it, up and down change a value. The
+  Linux and macOS launchers move to pages too.
+
+### Fixed
+
+- **Save checks on Windows.** Save recovery no longer checks the bare drive
+  name (`C:`, the drive's current folder) and reads file types from Windows
+  attributes, so files dated before 1970 no longer stop recovery when the
+  runtime is built with MinGW.
+- **First build stopping with "Access is denied".** When antivirus is still
+  scanning the new disc links or the extracted disc, the build waits up to 30
+  seconds for the folder to unlock instead of failing on `play-disc.tmp`.
+
+## 0.4 — 2026-10-27
+
+A free camera for screenshots, chrome costumes that reflect the stage,
+falling snow on SNOW, and exe launchers on Windows.
+
+### Added
+
+- **Free camera.** With **Free camera** ticked in the launcher (or
+  `RECOMP_FREE_CAMERA=1`), F1, `` ` `` or a click of the right stick takes the
+  game's camera and flies it through fights and cutscenes with the DOAXBV
+  port's controls: the sticks or WASD and the arrow keys, a right-mouse
+  drag to look, freeze (P, or Start while flying) and step the game, switch camera, reset,
+  turn to a fighter and change her swimsuit, and a clean view that hides the
+  HUD and the panel. F12, or the d-pad's right while flying, saves a
+  screenshot of the game's frame to `DOA3` in the Pictures folder (the
+  Windows known folder). No control uses Back. The game's culling follows
+  the free camera, so nothing at the edges of the view drops out: the camera build (USA 0x0002A540, Japan
+  0x00027720) is wrapped, not replaced, so both generated programs' hashes
+  change. Works on Japan 3.1 and USA 3.0. Keys and the mouse are
+  read through the input host on every platform; the SDL_GPU overlay panel
+  resizes with the window. See `docs/free-camera.md`.
+
+### Changed
+
+- **The launcher and the game are exes** (Windows). `Launcher.exe` replaces
+  `Launcher.cmd` and does everything it did: build, settings, drag and
+  drop, controller. `DOA3.exe` starts the game with the saved settings.
+  Neither needs PowerShell; both come from `tools/launcher.cs`, built with
+  the C# compiler every Windows ships.
+
+### Fixed
+
+- **Chrome costumes reflect the stage.** Costumes whose texture the Xbox
+  generates from the reflection vector, such as Zack's third, showed that
+  texture stretched along the body; the reflection is now generated as the
+  Xbox does on every backend.
+
+- **Snow falls on SNOW.** Point lists, the game's particles, were dropped,
+  so SNOW had no snow and AQUA PALACE lost its particles. Each point is now
+  drawn as a camera-facing quad sized as Direct3D sizes point sprites, with
+  depth and fog like the rest of the scene.
+
+## 0.3.1 Alpha (experimental) — 2026-10-26
+
+A fix for Windows players whose game stopped at the second start.
+
+### Fixed
+
+- **Second start with a save stopped at boot** (Windows). With a save in
+  `TDATA`, the boot runs the legal notice and the save load without waiting,
+  and a graphics card still busy with the previous frame made the game stop
+  with `Present failed hr=0x887A000A`. That frame is now skipped instead,
+  and the log notes the first skip once.
+
+## 0.3 Alpha (experimental) — 2026-10-24
+
+The Japan 3.1 disc becomes the main build, one launcher now builds and plays
+the game and shows which version is installed, every DOA3 woman can wear her
+DOAXBV swimsuits from the player's own DOAXBV disc, and the movies are
+optional. The runner also builds on macOS and Linux.
+
+### Changed
+
+- **Japan 3.1 is the main build.** The build and the launcher take the Japan
+  3.1 disc, with 3.1's moves, balance and costumes, as well as the USA 3.0
+  disc, telling them apart by `default.xbe`. Each version keeps its own
+  extraction (`private/imported-disc-jp`, `private/imported-disc`) and play
+  folder with its saves (`private/play-disc-jp`, `private/play-disc`), so
+  building one never touches the other. The launcher shows the installed
+  version in its top left corner and on the BUILD GAME and START GAME pages,
+  and the game log's first runner line names the disc (title, region,
+  version and `default.xbe` hash).
+
+- **One launcher builds and plays.** `Launcher.cmd` gains a **BUILD GAME**
+  page: drop your DOA3 ISO or disc folder onto `Launcher.cmd` or the
+  launcher window, or choose it there, set Movies and build, with the
+  build's progress in the information line and its output in
+  `private/build.log`. **START GAME** plays and sends you to the build page
+  until a build exists. `BuildGame.cmd`, `Play.cmd` and `ExtractIso.cmd`
+  are gone; `tools/build_game.py` and `tools/play.ps1` still run on their
+  own. An Xbox controller now drives the launcher's menus: D-pad or left
+  stick, A to select, B to go back.
+
+- **Movies are optional.** The build page's **Movies** setting leaves out the
+  18 movies, 3.4 GB of the 4.5 GB disc; the game then skips each one,
+  including the intro. Building again with Movies on restores them.
+
+- **The stick moves the fighter.** Analog Button is turned on at every boot,
+  since DOA3 reads the stick only with it on, and a tap of a face button
+  reads as a light press, so a tap of P stays a P instead of a hard →+P.
+
+### Added
+
+- **DOAXBV swimsuits.** With the player's own DOAXBV disc (an `.iso` or the
+  extracted folder), every DOA3 woman can wear any of her DOAXBV swimsuits,
+  switched live in a fight on USA 3.0 and Japan 3.1: click L3 on any
+  controller to open the swimsuit menu, then LB / LT for P1 or
+  RB / RT for P2, hold to scroll, with the suit's number and name shown under
+  the life bars and a panel listing the controls. X / B marks a
+  favorite and Y browses only favorites (saved per girl in
+  `private/suit-favorites.txt`), and the launcher can start each fighter in
+  her first favorite. Fighters keep their DOA3 heads, hair and animation; the
+  neck turns with the head, joints bend as DOAXBV bends them, hands close
+  with DOA3's fists, ankles stay smooth with the toes up, and skirts and
+  tassels swing and clear the body as DOAXBV moves them. Suits are built
+  at run time from the disc through recipes of numbers and disc locations
+  (`recipes/doaxbv-suits.pack.gz`); no DOAXBV data ships. The disc is
+  found in `private/` or a `doaxbv-re` checkout beside this one, or chosen
+  or dropped in the launcher. See `docs/doaxbv-swimsuits.md`.
 
 - **macOS and Linux builds.** The runner builds natively on macOS (Apple
   Silicon and Intel) and Linux x86-64, including SteamOS, with the host layer
@@ -12,8 +183,37 @@
   table fog, the gamma ramp, the widescreen HUD at 4:3, guest viewports,
   line lists, constant-alpha blending, front-buffer reads and mipmapped
   frame copies above native resolution. `build_game.sh`,
-  `launcher.sh` and `run_game.sh` match `BuildGame.cmd`, `Launcher.cmd` and
-  `Play.cmd`; see `docs/building.md`.
+  `launcher.sh` and `run_game.sh` build, configure and play; see
+  `docs/building.md`. The release has `DOA3-0.3-Alpha-macOS.tar.gz` and
+  `DOA3-0.3-Alpha-Linux.tar.gz` beside the Windows ZIP, with the same
+  source and the scripts kept executable; extract one instead of cloning.
+
+- **Skippable legal notice.** Any controller button skips the scrolling
+  legal notice at boot.
+
+### Fixed
+
+- **Forest dust** draws as faint puffs instead of a solid brown blob.
+- **DOATEC HK street:** wet-road reflections show only in puddles, and the
+  road no longer flickers under the street lights.
+- **Select screen:** at 16:9 the portrait stays inside its 4:3 frame, the line
+  under names is gone, and portraits appear almost at once.
+- **Performance:** fewer per-draw vertex copies and capture work off the
+  game thread.
+- **Swimsuit menu:** LB, RB, X, B and Y register again; buttons report a light
+  press, which the menu used to ignore.
+- **Windows build without Visual Studio:** the build no longer stops with a
+  CMake "NMake Makefiles does not support platform specification" error when
+  no Visual Studio C++ tools are installed. It checks for them before lifting
+  and installs the Visual Studio 2022 Build Tools' C++ workload (several GB,
+  after a Windows prompt) when they are missing.
+
+### Known limits
+
+- Japan 3.1: the Story ending runs at 8-11 fps, animation can look slightly
+  off, the KO slowdown plays only when the computer's fighter is knocked out,
+  the auto-save runs without the crash journal, and reverb sends are only
+  logged.
 
 ## 0.2 Alpha (experimental) — 2026-10-09
 

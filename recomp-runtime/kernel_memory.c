@@ -108,17 +108,38 @@ static Allocation *reuse_allocation(
     AllocationKind kind)
 {
     Allocation *best = NULL;
+    uint32_t best_head = 0u;
     for (size_t i = 0; i < MAX_ALLOCATIONS; ++i) {
         Allocation *candidate = &allocations[i];
-        uint32_t physical = candidate->base & 0x7fffffffu;
+        uint64_t physical = candidate->base & 0x7fffffffu;
+        /* Place the request at the first aligned address inside the block:
+           coalesced free blocks need not start on the requested alignment. */
+        uint64_t start = (physical > lowest ? physical : lowest) + alignment - 1u;
+        start &= ~(uint64_t)(alignment - 1u);
         if (!candidate->active && candidate->capacity >= capacity &&
             (candidate->kind == ALLOCATION_CONTIGUOUS) ==
                 (kind == ALLOCATION_CONTIGUOUS) &&
-            (physical & (alignment - 1u)) == 0u && physical >= lowest &&
-            (uint64_t)physical + capacity <= (uint64_t)highest + 1u &&
+            start + capacity <= physical + candidate->capacity &&
+            start + capacity <= (uint64_t)highest + 1u &&
             (best == NULL || candidate->capacity < best->capacity)) {
             best = candidate;
+            best_head = (uint32_t)(start - physical);
         }
+    }
+    if (best != NULL && best_head != 0u) {
+        /* Keep the unaligned head free; without metadata, use the arena. */
+        Allocation *head = NULL;
+        for (size_t i = 0; i < MAX_ALLOCATIONS && head == NULL; ++i) {
+            if (allocations[i].base == 0u && !allocations[i].active) {
+                head = &allocations[i];
+            }
+        }
+        if (head == NULL) return NULL;
+        *head = (Allocation){
+            .base = best->base, .capacity = best_head, .kind = best->kind,
+        };
+        best->base += best_head;
+        best->capacity -= best_head;
     }
     if (best != NULL && best->capacity > capacity) {
         /* If metadata is full, retain the remainder until this block is freed. */
@@ -191,8 +212,14 @@ static uint32_t allocate_contiguous_guest(
     uint32_t alignment,
     uint32_t protect)
 {
-    return allocate_range(size, alignment, protect, ALLOCATION_CONTIGUOUS,
+    uint32_t base = allocate_range(size, alignment, protect, ALLOCATION_CONTIGUOUS,
         lowest_address, highest_address);
+    if (base == 0u) {
+        fprintf(stderr, "recomp kernel: contiguous allocation failed size=0x%08x"
+            " range=0x%08x-0x%08x align=0x%x\n", (unsigned)size,
+            (unsigned)lowest_address, (unsigned)highest_address, (unsigned)alignment);
+    }
+    return base;
 }
 
 static void coalesce_free_allocation(Allocation *allocation)

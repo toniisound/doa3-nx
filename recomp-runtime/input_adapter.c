@@ -1,3 +1,4 @@
+#include "doa3_build.h"
 #include "input_adapter.h"
 #include "stop_report.h"
 #include "xapi_time_adapter.h"
@@ -15,7 +16,7 @@ enum {
     XINPUT_GET_CAPABILITIES_ADDRESS = 0x001e6ebbu,
     XINPUT_GET_STATE_ADDRESS = 0x001e70adu,
     XINPUT_SET_STATE_ADDRESS = 0x001e711eu,
-    XAPI_GAMEPAD_DEVICE_TYPE = 0x001e59e0u,
+    XAPI_GAMEPAD_DEVICE_TYPE = DOA3(0x001e59e0u, 0x00210800u),
     XINPUT_CAPABILITIES_SIZE = 25u,
     XINPUT_CAPABILITIES_RUMBLE_OFFSET = 0x15u,
     XINPUT_CAPABILITIES_RUMBLE_SIZE = 4u,

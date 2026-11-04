@@ -262,8 +262,9 @@ The options and flags are listed in [runtime-options.md](runtime-options.md).
   a screen-space quad narrower than the centered 4:3 area is narrowed. A
   narrow quad meant to reach the screen edge would be pulled in, and one draw
   that batches 2D quads across the 4:3 area keeps its stretch.
-- Host table fog uses clip `w` as its depth; the units of the game's fog
-  start and end have not been checked against a capture.
+- Point lists with FVF `0x42` (two to six points) were declined in one play
+  session; their stage and render states have not been traced, and they now
+  draw through the general point path.
 - The HRTF level matches xemu, not measured hardware.
 - The launcher was tested by a script that picked settings, not by clicking
   its window. The test ZIP was built and run only on the development machine.

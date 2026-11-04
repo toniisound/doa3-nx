@@ -1,14 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Play-disc linking with and without movies, on a synthetic disc."""
+import hashlib
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import build_game
 from build_game import MOVIE_STUB, cut_owned_movies, find_disc, prepare_play_disc
 from extract_iso import sha256
+
+
+def sha256_of(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def fake_extract(iso, output, tool):
+    """extract-xiso stand-in: the ISO's bytes become default.xbe."""
+    (output / "disc").mkdir(parents=True)
+    (output / "disc" / "default.xbe").write_bytes(iso.read_bytes())
+    (output / "receipt.json").write_text(f'{{"iso_sha256": "{sha256(iso)}"}}', encoding="utf-8")
 
 
 class PlayDiscTests(unittest.TestCase):
@@ -63,15 +76,88 @@ class PlayDiscTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "restore them"):
                 find_disc(None, movies=True)
             # The same ISO with movies re-extracts.
-            with patch.object(build_game, "extract") as extract:
+            with patch.object(build_game, "extract", side_effect=fake_extract), \
+                    patch.object(build_game, "VERSIONS", {sha256_of(b"iso"): {"suffix": ""}}):
                 self.assertEqual(find_disc(iso, movies=True), imported / "disc")
-            extract.assert_called_once()
-            self.assertFalse(imported.exists())
+            self.assertEqual((imported / "disc" / "default.xbe").read_bytes(), b"iso")
+            self.assertFalse(build_game.movies_cut(imported / "disc"))
+
+    def test_each_version_keeps_its_own_extraction(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
+                patch.object(build_game, "extract", side_effect=fake_extract), \
+                patch.object(build_game, "VERSIONS", {sha256_of(b"jp"): {"suffix": "-jp"},
+                                                      sha256_of(b"usa"): {"suffix": ""}}):
+            private = Path(folder) / "private"
+            usa = private / "imported-disc"
+            (usa / "disc").mkdir(parents=True)
+            (usa / "disc" / "default.xbe").write_bytes(b"usa")
+            (usa / "receipt.json").write_text('{"iso_sha256": "other"}', encoding="utf-8")
+            iso = Path(folder) / "jp.iso"
+            iso.write_bytes(b"jp")
+
+            self.assertEqual(find_disc(iso), private / "imported-disc-jp" / "disc")
+            self.assertEqual((usa / "disc" / "default.xbe").read_bytes(), b"usa", "USA extraction untouched")
+            self.assertFalse((private / "imported-disc.new").exists())
+            # The same ISO again reuses its extraction.
+            with patch.object(build_game, "extract") as extract:
+                self.assertEqual(find_disc(iso), private / "imported-disc-jp" / "disc")
+            extract.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "Japan 3.1 and USA 3.0 only"):
+                build_game.disc_version(Path(folder))
 
     def test_closed_stdin_installs_movies(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
                 patch("sys.stdin.isatty", return_value=True), patch("builtins.input", side_effect=EOFError):
             self.assertTrue(build_game.ask_movies(None))
+
+    def test_locked_play_disc_rename_is_retried(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
+                patch.object(build_game.time, "sleep") as sleep:
+            disc = Path(folder) / "disc"
+            disc.mkdir()
+            (disc / "default.xbe").write_bytes(b"xbe")
+            rename = Path.rename
+            calls = []
+
+            def locked_once(self, target):
+                calls.append(self)
+                if len(calls) == 1:
+                    raise PermissionError("scanning")
+                return rename(self, target)
+
+            with patch.object(Path, "rename", locked_once):
+                prepare_play_disc(disc, movies=True)
+            self.assertEqual(len(calls), 2)
+            sleep.assert_called_once()
+            self.assertEqual((Path(folder) / "private" / "play-disc" / "default.xbe").read_bytes(), b"xbe")
+
+
+class WindowsToolsTests(unittest.TestCase):
+    def test_download_is_verified_and_unpacked_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with zipfile.ZipFile(Path(folder) / "tool.zip", "w") as contents:
+                contents.writestr("tool-1.0-x86_64/bin/tool.exe", b"tool")
+            zipped = (Path(folder) / "tool.zip").read_bytes()
+
+        def fake_download(url, path):
+            Path(path).write_bytes(zipped)
+
+        with tempfile.TemporaryDirectory() as folder, patch.object(build_game, "ROOT", Path(folder)), \
+                patch("urllib.request.urlretrieve", side_effect=fake_download) as download, \
+                patch("builtins.print"):
+            private = Path(folder) / "private"
+            home = private / "tool-1.0"
+            with patch.object(build_game, "WINDOWS_TOOLS", [("tool-1.0", "tool.exe", "https://x/tool.zip", "0" * 64)]), \
+                    self.assertRaisesRegex(ValueError, "pinned SHA-256"):
+                build_game.windows_tools()
+            self.assertEqual(list(private.iterdir()), [], "a rejected download leaves nothing")
+            with patch.object(build_game, "WINDOWS_TOOLS",
+                              [("tool-1.0", "tool.exe", "https://x/tool.zip", sha256_of(zipped))]):
+                self.assertEqual(build_game.windows_tools(), [home / "bin"])
+                self.assertEqual((home / "bin" / "tool.exe").read_bytes(), b"tool")
+                self.assertEqual(list(private.iterdir()), [home])
+                self.assertEqual(build_game.windows_tools(), [home / "bin"])
+            self.assertEqual(download.call_count, 2, "an unpacked toolchain is reused")
 
 
 if __name__ == "__main__":

@@ -7,14 +7,22 @@
 
 enum {
     D3D_DEVICE_SET_VERTEX_SHADER_ADDRESS = 0x001e7170u,
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    /* D3D8 4134 SetVertexShader (0x001E0310) runs the 4928 algorithm below
+       with a narrower declaration dirty set. */
+    D3D_DEVICE_GLOBAL = 0x001ede80u,
+    D3D_STATE_DIRTY_MASK = 0x001ead68u,
+    D3D_VERTEX_DECLARATION_DIRTY_BITS = 0x00001200u,
+#else
     D3D_DEVICE_GLOBAL = 0x001f2978u,
     D3D_STATE_DIRTY_MASK = 0x001f2984u,
+    D3D_VERTEX_DECLARATION_DIRTY_BITS = 0x00001600u,
+#endif
     D3D_VERTEX_DECLARATION_OFFSET = 0x0380u,
     D3D_VERTEX_SHADER_HANDLE_OFFSET = 0x0384u,
     D3D_VERTEX_PROGRAM_OFFSET = 0x0388u,
     D3D_VERTEX_BASE_DIRTY_BITS = 0x00000070u,
     D3D_VERTEX_PROGRAM_DIRTY_BIT = 0x00000400u,
-    D3D_VERTEX_DECLARATION_DIRTY_BITS = 0x00001600u,
 };
 
 static RecompD3dVertexShaderModel d3d_vertex_shader_model;
@@ -43,7 +51,7 @@ static void fail_vertex_shader(uint32_t handle)
     recomp_stop(2, "d3d-vertex-shader:0x%08" PRIx32, handle);
 }
 
-#ifdef RECOMP_DOAXBV_BINDINGS
+#if defined(RECOMP_DOAXBV_BINDINGS) || defined(RECOMP_DOA3_JP_BINDINGS)
 void recomp_d3d_set_vertex_shader_adapter(void)
 {
     uint32_t entry_esp = recomp_runtime.registers.esp;

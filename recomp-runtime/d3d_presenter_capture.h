@@ -29,6 +29,12 @@ public:
     void clear();
     // Copied commands, records and aligned payload bytes, excluding capacity.
     uint64_t bytes() const;
+    // Capacity a frame needed, so the render thread can reserve the peak of a
+    // cleared packet and the game thread never grows (and moves) the vectors.
+    struct Size { size_t entries, commands, payload_words, spans; }; // spans: table slots
+    Size size() const;
+    void reserve(const Size &size);
+
 
 private:
     // Default-initializes instead of zeroing; Debug builds rebind to proxy types.

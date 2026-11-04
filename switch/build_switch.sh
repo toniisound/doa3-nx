@@ -44,16 +44,16 @@ if [[ -z "${GENERATED}" ]]; then
     exit 1
 fi
 
-# The same manifest and EBP count build_game.py pins.
-MANIFEST="$(sed -n 's/^PROGRAM_SHA256 = "\([0-9a-f]*\)"/\1/p' "${ROOT}/tools/build_game.py")"
-EBP="$(sed -n 's/^PROGRAM_EBP = \([0-9]*\)/\1/p' "${ROOT}/tools/build_game.py")"
-if [[ -z "${MANIFEST}" || -z "${EBP}" ]]; then
-    echo "Could not read PROGRAM_SHA256/PROGRAM_EBP from tools/build_game.py" >&2
+# The manifest and EBP count build_game.py validated for this program, and
+# which disc version (USA 3.0 or Japan 3.1) it was lifted from.
+read -r MANIFEST EBP FORWARDS JP VERSION < <(python3 "${ROOT}/switch/program_info.py" "${GENERATED}") || exit 1
+if [[ -z "${MANIFEST}" ]]; then
+    echo "Could not identify the program in ${GENERATED}" >&2
     exit 1
 fi
 
 echo "Program:  ${GENERATED}"
-echo "Manifest: ${MANIFEST} (EBP ${EBP})"
+echo "Manifest: ${MANIFEST} (EBP ${EBP}, ${VERSION//_/ })"
 
 # The homebrew menu icon (256x256 JPEG) is required. It is cover art, so it
 # stays out of git: keep it in private/icon.jpg, which git never touches
@@ -78,6 +78,8 @@ cmake -S "${ROOT}/switch" -B "${ROOT}/build/switch" "${GENERATOR[@]}" \
     -DRECOMP_PROGRAM_DIR="${GENERATED}" \
     -DRECOMP_PROGRAM_MANIFEST_SHA256="${MANIFEST}" \
     -DRECOMP_PROGRAM_EBP_EXPECTED="${EBP}" \
+    -DRECOMP_PROGRAM_FORWARDS="${FORWARDS}" \
+    -DRECOMP_DOA3_JP="${JP}" \
     -DDOA3_NX_GENERATED_OPT="${OPT}" \
     -DDOA3_NX_FUNC_PROFILE="${FUNC_PROFILE}" \
     -DDOA3_NX_PGO="${PGO_MODE}" \

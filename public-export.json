@@ -16,10 +16,6 @@
     "LICENSE",
     "NOTICE",
     "README.md",
-    "ExtractIso.cmd",
-    "BuildGame.cmd",
-    "Launcher.cmd",
-    "Play.cmd",
     "build_game.sh",
     "launcher.sh",
     "run_game.sh",
@@ -36,6 +32,8 @@
     "docs/doa3-d3d-draw.md",
     "docs/doa3-fibers.md",
     "docs/doa3-input.md",
+    "docs/doaxbv-swimsuits.md",
+    "docs/free-camera.md",
     "docs/history.md",
     "docs/runtime-options.md",
     "docs/test-release.md",
@@ -45,7 +43,9 @@
     "tools/build_game.py",
     "tools/doa3_abi.py",
     "tools/test_doa3_abi.py",
-    "tools/launcher.ps1",
+    "tools/launcher.cs",
+    "tools/launcher-background.jpg",
+    "tools/launcher-background.png",
     "tools/package_test.py",
     "tools/play.ps1",
     "tools/launcher_macos.swift",
@@ -60,8 +60,14 @@
     "xbe/**",
     "docs/doa3-d3d-frame.md",
     "docs/doa3-d3d-symbols.md",
+    "docs/doa3-jp-test.md",
     "tools/doa3/manual_functions.json",
-    "tools/doa3/seed_functions.json"
+    "tools/doa3/seed_functions.json",
+    "tools/doa3/functions.json.gz",
+    "tools/doa3-jp/manual_functions.json",
+    "tools/doa3-jp/seed_functions.json",
+    "tools/doa3-jp/functions.json.gz",
+    "recipes/doaxbv-suits.pack.gz"
   ],
   "quarantine": [
     "decomp/**",
@@ -82,7 +88,7 @@
     {
       "path": "tools/xboxrecomp",
       "url": "https://github.com/NoRain211/xboxrecomp.git",
-      "commit": "aeb6651f1fd7c0366228ab9d1e8b485c792c8fd6"
+      "commit": "4ebdf773a7319d436ad4a2853d0464d82cd3cb44"
     },
     {
       "path": "third_party/smaa",
@@ -122,8 +128,43 @@
       "reason": "Synthetic DXT1 fixture: RGB565 white/black endpoints and zero selectors in d3d_presenter_d3d11_test.cpp."
     },
     {
+      "sha256": "af5bd80569c76220c8521cc23779c31ae23373b35fb9d78b612743508c44f859",
+      "reason": "The last four bytes of the PNG file signature (0x0D, 0x0A, 0x1A, 0x0A) from the PNG specification, written and checked by screenshot.c and screenshot_test.c."
+    },
+    {
       "sha256": "de346b217c24b4ae309bf87684207ac728a6e7e9527122403bf34ec9e7595d03",
       "reason": "Class ID of the runtime's own audio capture XAPO in audio_capture_xapo.cpp."
+    },
+    {
+      "sha256": "7601af5acc2c5f563b43be03d4dbc3776ce348ca86f46ea4d204b352715884f9",
+      "reason": "Tail of KSDATAFORMAT_SUBTYPE_IEEE_FLOAT from the Windows SDK's ksmedia.h, which audio_capture_xapo.cpp spells out because MinGW links no GUID library for it."
+    }
+  ],
+  "binary_files": [
+    {
+      "path": "recipes/doaxbv-suits.pack.gz",
+      "sha256": "5d17ae9b4bbed3fadb07a1bbb2c98fd0161d06b268006dc1e2cdee87b965adca",
+      "reason": "DOAXBV swimsuit recipes (gzip): disc offsets, assembly steps, bone, weld and material numbers and suit names, replayed against the player's own DOAXBV disc. No game asset bytes. Update the hash with the file."
+    },
+    {
+      "path": "tools/doa3/functions.json.gz",
+      "sha256": "4c3e0c7717e28e7e632e3094fc9a95a1de9bfb3a1c65276e46d6daa94bde36f8",
+      "reason": "The lifter's USA 3.0 function list (gzip): addresses, sizes, instruction counts, callers and sub_ names from tools.disasm, so builds skip disassembly. No instruction bytes or game text. Update the hash with the file."
+    },
+    {
+      "path": "tools/doa3-jp/functions.json.gz",
+      "sha256": "c9afeb0992e1d195b600ab60e9ee3f68fb83f4a016efe6407473e7c5bca7fd13",
+      "reason": "The same function list for Japan 3.1. Update the hash with the file."
+    },
+    {
+      "path": "tools/launcher-background.jpg",
+      "sha256": "5947e43268c7a0a0cf3b85f90cf3839cb03c4e5fdb119b577e035a9ed408d0c2",
+      "reason": "Launcher backdrop for Windows and macOS: an AI-generated (Gemini) repaint of the title screen's beach without its text, no game asset bytes. Update the hash with the file."
+    },
+    {
+      "path": "tools/launcher-background.png",
+      "sha256": "2df2429f1b9d3c7607dcf8d9ec1aefadf379f1baad06abd64d3eee8d8447b38b",
+      "reason": "The same backdrop at 640x400 for the SDL launcher, which loads PNG but not JPEG. Update the hash with the file."
     }
   ]
 }

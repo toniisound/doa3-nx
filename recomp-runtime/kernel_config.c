@@ -1,4 +1,5 @@
 #include "kernel_abi.h"
+#include "widescreen.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -11,16 +12,14 @@ enum {
 
 /* XC_VIDEO flags: 60Hz, 480p/720p/1080i, widescreen 0x010000 and letterbox
    0x100000 (nxdk hal/video.h). DOA3's box lists no widescreen support, so the
-   default is the dashboard's Normal setting (4:3); RECOMP_D3D_WIDESCREEN=1
-   sets the last two, and DOA3 then renders its 3D view anamorphic 16:9. The
-   presenter reads the same variable to size the window; keep the two in step. */
+   default is the dashboard's Normal setting (4:3); RECOMP_D3D_WIDESCREEN
+   sets the last two, and DOA3 then renders its 3D view anamorphic 16:9 (or
+   the shape the runner writes into its constants). */
 static uint32_t video_flags(void)
 {
-    const char *widescreen = getenv("RECOMP_D3D_WIDESCREEN");
+    unsigned aspect_w = 0u, aspect_h = 0u;
 
-    return widescreen != NULL && strcmp(widescreen, "0") != 0
-        ? 0x005f0000u
-        : 0x004e0000u;
+    return recomp_widescreen(&aspect_w, &aspect_h) ? 0x005f0000u : 0x004e0000u;
 }
 
 uint32_t recomp_kernel_query_nonvolatile_setting(

@@ -63,9 +63,9 @@ constexpr uint64_t kTargetByteLimit = 64u * 1024u * 1024u;
 constexpr uint32_t kVertexRingBytes = 32u * 1024u * 1024u;
 constexpr uint32_t kIndexRingBytes = 8u * 1024u * 1024u;
 constexpr uint32_t kUniformRingBytes = 16u * 1024u * 1024u;
-constexpr uint32_t kHeaderUniformFloats = 156u;
+constexpr uint32_t kHeaderUniformFloats = 160u;  // ends with fog_params, fog_color, texcoord_clamp
 constexpr uint32_t kLightingUniformFloats = kHeaderUniformFloats;
-constexpr uint32_t kTransformUniformFloats = 488u;
+constexpr uint32_t kTransformUniformFloats = 492u;
 constexpr uint32_t kProgramConstantFloats = 192u * 4u;
 constexpr uint32_t kNoProgramConstants = UINT32_MAX;
 
@@ -160,6 +160,7 @@ struct QueuedDraw {
     uint32_t constant_color = 0;
     bool constant_alpha = false;
     uint8_t stencil_ref = 0;
+    int32_t base_vertex = 0; // -first_vertex: indices count from before vertex_bytes
     float viewport[6]{}; // x, y, w, h, min z, max z; zero width keeps the target
     uint32_t uniform_offset = 0;  // bytes into the segment's uniform data
     uint32_t uniform_size = 0;    // bytes
@@ -381,6 +382,7 @@ layout(std140, binding = 0) uniform TransformUniforms {
     vec4 light_stage;
     vec4 fog_params;
     vec4 fog_color;
+    vec4 texcoord_clamp;
     mat4 directional_normals[4];
     vec4 directional_base;
     vec4 directional_material;
@@ -541,7 +543,7 @@ std::string buildVertexShader(const RecompD3dVertexLayout &layout, uint32_t prog
     }
     s += "    v_reflection_coord = vec2(0.0);\n";
     if (has_texcoord && !layout.pretransformed) {
-        s += "    if (u.reflection_flags.x > 1.5) {\n";
+        s += "    if (u.reflection_flags.x == 2.0) {\n";
         s += "        v_reflection_coord = in_texcoord;\n";
         s += "    } else if (u.reflection_flags.x > 0.5) {\n";
         s += "        vec3 eye = (u.reflection_world_view * vec4(in_position, 1.0)).xyz;\n";
@@ -552,7 +554,10 @@ std::string buildVertexShader(const RecompD3dVertexLayout &layout, uint32_t prog
         } else {
             s += "        vec3 r = normalize(eye);\n";
         }
-        s += "        v_reflection_coord = (u.reflection_transform * vec4(r, 1.0)).xy;\n";
+        // 3: chrome texgen replaces UV0 (reflection_texgen); 1: env layer.
+        s += "        vec2 coord = (u.reflection_transform * vec4(r, 1.0)).xy;\n";
+        s += "        if (u.reflection_flags.x == 3.0) v_texcoord = coord;\n";
+        s += "        else v_reflection_coord = coord;\n";
         s += "    }\n";
     }
     s += "    if (u.fog_params.x > 0.5) {\n";
@@ -600,7 +605,7 @@ std::string buildFragmentShader(const RecompD3dVertexLayout &layout, uint32_t pr
         s += "    if (u.reflection_flags.z > 0.5) refl_tc /= v_program_q.y;\n";
     }
     s += "    vec4 shaded = v_color;\n";
-    s += "    if (u.reflection_flags.x > 0.5) {\n";
+    s += "    if (u.reflection_flags.x > 0.5 && u.reflection_flags.x < 2.5) {\n";
     s += "        vec4 base = texture(guest_texture, tc);\n";
     s += "        base.a *= u.reflection_diffuse.a;\n";
     s += "        vec4 env = texture(alpha_mask, refl_tc);\n";
@@ -626,7 +631,8 @@ std::string buildFragmentShader(const RecompD3dVertexLayout &layout, uint32_t pr
     s += "    if (u.blend_flags.y == 1.0) {\n";
     s += "        shaded = u.texture_factor;\n";
     s += "    } else if (u.draw_flags.x > 0.5) {\n";
-    s += "        vec4 sampled = texture(guest_texture, tc * u.texture_flags.xy);\n";
+    s += "        vec4 sampled = texture(guest_texture,\n";
+    s += "            clamp(tc, u.texcoord_clamp.xy, u.texcoord_clamp.zw) * u.texture_flags.xy);\n";
     s += "        if (u.lighting_flags.y > 0.5) sampled.rgb = vec3(1.0);\n";
     s += has_diffuse ? "        shaded *= sampled;\n" : "        shaded = sampled;\n";
     s += "        if (u.directional_flags.w > 0.5) {\n";
@@ -1428,8 +1434,8 @@ void flushSegment(RecompD3dPresenter *p)
                 last_stencil_key = key;
             }
         }
-        glDrawElements(q.state.primitive, static_cast<GLsizei>(q.index_count), GL_UNSIGNED_SHORT,
-            reinterpret_cast<const void *>(static_cast<uintptr_t>(i_base + q.index_offset)));
+        glDrawElementsBaseVertex(q.state.primitive, static_cast<GLsizei>(q.index_count), GL_UNSIGNED_SHORT,
+            reinterpret_cast<const void *>(static_cast<uintptr_t>(i_base + q.index_offset)), q.base_vertex);
     }
 
     seg.draws.clear();
@@ -1931,10 +1937,27 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             constants[138] = draw.program_alpha_mask ? 1.0f : 0.0f;
             constants[139] = draw.program_mask_lod_bias;
         }
-        if (draw.directional.enabled && !draw.program_count) {
+        // The draw adapter leaves the normal matrices to this thread (Switch):
+        // inverse-transpose each world matrix in use; a singular one turns
+        // the draw's lighting off, as the adapter itself did.
+        bool lit = draw.directional.enabled && !draw.program_count;
+        float normals[4][16]{};
+        if (lit) {
+            for (uint32_t i = 0u; i < 4u; ++i) {
+                // Unused slots stay zero (the adapters zero the block).
+                const float *world = draw.directional.world_transforms[i];
+                bool used = false;
+                for (uint32_t k = 0u; k < 16u; ++k) used |= world[k] != 0.0f;
+                if (used && !recomp_d3d_normal_transform(world, normals[i])) {
+                    lit = false;
+                    break;
+                }
+            }
+        }
+        if (lit) {
             const auto &light = draw.directional;
             float *dir = constants + kLightingUniformFloats;
-            std::memcpy(dir, light.normal_transforms, sizeof light.normal_transforms);
+            std::memcpy(dir, normals, sizeof normals);
             std::memcpy(dir + 64, light.ambient_emissive, sizeof light.ambient_emissive);
             std::memcpy(dir + 68, light.material_diffuse, sizeof light.material_diffuse);
             std::memcpy(dir + 72, light.directions, sizeof light.directions);
@@ -1952,12 +1975,15 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             std::memcpy(constants + 144, light.stage, sizeof light.stage);
         }
         if (draw.fog.mode != 0u && !draw.program_count) {
-            float *fog = constants + kHeaderUniformFloats - 8u;
+            float *fog = constants + kHeaderUniformFloats - 12u;  // fog_params, fog_color
             fog[0] = static_cast<float>(draw.fog.mode);
             fog[1] = draw.fog.mode == 1u ? draw.fog.end : draw.fog.density;
             fog[2] = draw.fog.mode == 1u ? 1.0f / (draw.fog.end - draw.fog.start) : 0.0f;
             std::memcpy(fog + 4, draw.fog.color, sizeof draw.fog.color);
         }
+        recomp_d3d_quad_texcoord_clamp(draw.vertex_bytes, draw.vertex_stride,
+            layout.pretransformed ? draw.vertex_count : 0u, layout.texcoord_offset,
+            constants + kHeaderUniformFloats - 4u);
         constants[64] = texture != 0 ? 1.0f : 0.0f;
         constants[65] = draw.depth.alpha_test_enable ? 1.0f : 0.0f;
         constants[66] = static_cast<float>(draw.depth.alpha_func);
@@ -1978,17 +2004,17 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
         constants[81] = (draw.texture.linear && draw.texture.height) ? 1.0f / draw.texture.height : 1.0f;
         constants[82] = draw.four_tap_filter ? 1.0f : 0.0f;
         constants[83] = draw.has_alpha_mask ? 1.0f : 0.0f;
-        if (draw.has_reflection) {
+        if (draw.has_reflection || draw.reflection_texgen) {
             std::memcpy(constants + 84, draw.reflection_world_view, 64u);
             std::memcpy(constants + 100, draw.reflection_normal, 64u);
             std::memcpy(constants + 116, draw.reflection_transform, 64u);
             std::memcpy(constants + 132, draw.reflection_diffuse, 16u);
-            constants[136] = draw.reflection_mesh_uv ? 2.0f : 1.0f;
+            constants[136] = draw.reflection_texgen ? 3.0f : draw.reflection_mesh_uv ? 2.0f : 1.0f;
             constants[137] = draw.reflection_normalize ? 1.0f : 0.0f;
         }
 
         // The whole block is bound: unlit draws leave the lighting tail zero.
-        const uint32_t uniform_floats = (draw.directional.enabled && !draw.program_count)
+        const uint32_t uniform_floats = lit
             ? kTransformUniformFloats : kHeaderUniformFloats;
         const uint32_t uniform_bytes = kTransformUniformFloats * sizeof(float);
         const uint32_t align = static_cast<uint32_t>(p->uniform_align);
@@ -2046,8 +2072,17 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             q.viewport[3] = draw.viewport[3] * sy;
             q.viewport[4] = draw.viewport[4];
             q.viewport[5] = draw.viewport[5];
+            /* The portrait sits in a 2D frame that widescreen narrows to 4:3, so
+               its viewport narrows the same way about the screen center. */
+            const float width = static_cast<float>(p->config.width);
+            if (p->widescreen && !draw.target.offscreen &&
+                squeezeWidescreen2d(draw.viewport[0], draw.viewport[0] + draw.viewport[2], width)) {
+                q.viewport[0] = (0.75f * draw.viewport[0] + 0.125f * width) * sx;
+                q.viewport[2] *= 0.75f;
+            }
         }
         q.stencil_ref = static_cast<uint8_t>(draw.depth.stencil_ref);
+        q.base_vertex = -static_cast<int32_t>(draw.first_vertex);
         q.uniform_offset = uniform_offset;
         q.uniform_size = uniform_bytes;
         q.program_offset = program_offset;

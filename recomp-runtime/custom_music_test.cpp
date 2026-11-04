@@ -166,6 +166,35 @@ Bytes wave_48k_mono()
     return bytes;
 }
 
+// Resolved at run time like custom_music.cpp, so the test starts without Media Foundation.
+struct MediaFoundation {
+    decltype(&MFStartup) startup;
+    decltype(&MFShutdown) shutdown;
+    decltype(&MFCreateMediaType) create_media_type;
+    decltype(&MFCreateMemoryBuffer) create_memory_buffer;
+    decltype(&MFCreateSample) create_sample;
+    decltype(&MFCreateSinkWriterFromURL) create_sink_writer;
+} mf;
+
+template <typename Function>
+bool resolve(HMODULE module, const char *name, Function &function)
+{
+    function = reinterpret_cast<Function>(reinterpret_cast<void *>(GetProcAddress(module, name)));
+    return function != nullptr;
+}
+
+bool load_media_foundation()
+{
+    const HMODULE plat = LoadLibraryW(L"mfplat.dll");
+    const HMODULE readwrite = plat ? LoadLibraryW(L"mfreadwrite.dll") : nullptr;
+    return readwrite && resolve(plat, "MFStartup", mf.startup) &&
+        resolve(plat, "MFShutdown", mf.shutdown) &&
+        resolve(plat, "MFCreateMediaType", mf.create_media_type) &&
+        resolve(plat, "MFCreateMemoryBuffer", mf.create_memory_buffer) &&
+        resolve(plat, "MFCreateSample", mf.create_sample) &&
+        resolve(readwrite, "MFCreateSinkWriterFromURL", mf.create_sink_writer);
+}
+
 // Encodes pcm with a Windows encoder. False when this Windows has none for
 // the format; the caller then skips that format and says so.
 bool encode(const fs::path &path, const GUID &subtype, const Bytes &pcm)
@@ -176,8 +205,8 @@ bool encode(const fs::path &path, const GUID &subtype, const Bytes &pcm)
     ComPtr<IMFSample> sample;
     DWORD stream = 0;
     BYTE *data = nullptr;
-    HRESULT hr = MFCreateSinkWriterFromURL(path.c_str(), nullptr, nullptr, &writer);
-    if (SUCCEEDED(hr)) hr = MFCreateMediaType(&out);
+    HRESULT hr = mf.create_sink_writer(path.c_str(), nullptr, nullptr, &writer);
+    if (SUCCEEDED(hr)) hr = mf.create_media_type(&out);
     if (SUCCEEDED(hr)) hr = out->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
     if (SUCCEEDED(hr)) hr = out->SetGUID(MF_MT_SUBTYPE, subtype);
     if (SUCCEEDED(hr)) hr = out->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, RECOMP_MUSIC_RATE);
@@ -187,7 +216,7 @@ bool encode(const fs::path &path, const GUID &subtype, const Bytes &pcm)
     if (SUCCEEDED(hr) && subtype == MFAudioFormat_FLAC)
         hr = out->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
     if (SUCCEEDED(hr)) hr = writer->AddStream(out.Get(), &stream);
-    if (SUCCEEDED(hr)) hr = MFCreateMediaType(&in);
+    if (SUCCEEDED(hr)) hr = mf.create_media_type(&in);
     if (SUCCEEDED(hr)) hr = in->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
     if (SUCCEEDED(hr)) hr = in->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
     if (SUCCEEDED(hr)) hr = in->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, RECOMP_MUSIC_RATE);
@@ -197,14 +226,14 @@ bool encode(const fs::path &path, const GUID &subtype, const Bytes &pcm)
     if (SUCCEEDED(hr)) hr = in->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, kSecondBytes);
     if (SUCCEEDED(hr)) hr = writer->SetInputMediaType(stream, in.Get(), nullptr);
     if (SUCCEEDED(hr)) hr = writer->BeginWriting();
-    if (SUCCEEDED(hr)) hr = MFCreateMemoryBuffer(static_cast<DWORD>(pcm.size()), &buffer);
+    if (SUCCEEDED(hr)) hr = mf.create_memory_buffer(static_cast<DWORD>(pcm.size()), &buffer);
     if (SUCCEEDED(hr)) hr = buffer->Lock(&data, nullptr, nullptr);
     if (SUCCEEDED(hr)) {
         std::memcpy(data, pcm.data(), pcm.size());
         buffer->Unlock();
         hr = buffer->SetCurrentLength(static_cast<DWORD>(pcm.size()));
     }
-    if (SUCCEEDED(hr)) hr = MFCreateSample(&sample);
+    if (SUCCEEDED(hr)) hr = mf.create_sample(&sample);
     if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer.Get());
     if (SUCCEEDED(hr)) hr = sample->SetSampleTime(0);
     if (SUCCEEDED(hr)) hr = sample->SetSampleDuration(10000000);
@@ -371,12 +400,11 @@ void check_track(uint32_t index, const Bytes *exact_pcm)
 
 extern "C" int recomp_custom_music_test(void)
 {
-    if (!LoadLibraryW(L"mfplat.dll") || !LoadLibraryW(L"mfreadwrite.dll") ||
-            FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+    if (!load_media_foundation() || FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
         std::printf("custom music: Media Foundation unavailable; skipped\n");
         return 77;
     }
-    if (FAILED(MFStartup(MF_VERSION))) {
+    if (FAILED(mf.startup(MF_VERSION, MFSTARTUP_FULL))) {
         std::printf("custom music: Media Foundation unavailable; skipped\n");
         CoUninitialize();
         return 77;
@@ -427,7 +455,7 @@ extern "C" int recomp_custom_music_test(void)
     } catch (const std::exception &error) {
         std::fprintf(stderr, "custom music test: %s\n", error.what());
     }
-    MFShutdown();
+    mf.shutdown();
     CoUninitialize();
     return result;
 }

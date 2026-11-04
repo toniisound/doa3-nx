@@ -9,6 +9,13 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(__MINGW32__) && !defined(_UCRT)
+/* msvcrt.dll, which w64devkit targets, has no timespec_get. */
+#include <pthread_time.h>
+#define TIME_UTC 1
+#define timespec_get(ts, base) (clock_gettime(CLOCK_REALTIME, (ts)) == 0 ? (base) : 0)
+#endif
+
 enum {
     DISPATCHER_SIGNAL_STATE = 0x04u,
     TIMER_DUE_TIME = 0x10u,

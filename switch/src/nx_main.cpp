@@ -33,6 +33,7 @@ extern "C" void __real_exit(int code) __attribute__((noreturn));
 
 extern "C" int doa3_nx_native_enabled; // doa3_nx_math.c
 
+extern "C" int doa3_nx_boot_menu(int initial_height, const char *version); // boot_menu.cpp
 extern "C" {
 static void flushLog(void); // below, with the log devoptab
 }
@@ -333,20 +334,31 @@ struct BootOptions {
     bool texcheck_once = false;
     bool gl_vsync = false;
     bool unpaced = false;
+    bool widescreen = true;
+    int resolution = 600; // render height: 720, 600 or 480 (the boot menu; 600 by default)
 };
+
+void writeOptions(const BootOptions &options)
+{
+    FILE *out = std::fopen(kOptions, "w");
+    if (out == nullptr) return;
+    std::fprintf(out,
+        "; DOA3 NX options (1 = on, 0 = off). resolution is the last choice of the\n"
+        "; boot menu (720, 600 or 480). Holding a button at boot also switches one\n"
+        "; for that run: X native_math off, Y texcheck_once on, ZL soft_vblank off,\n"
+        "; L gl_vsync on, R unpaced on.\n"
+        "resolution=%d\nwidescreen=%d\nnative_math=%d\nsoft_vblank=%d\ntexcheck_once=%d\ngl_vsync=%d\nunpaced=%d\n",
+        options.resolution, options.widescreen, options.native_math, options.soft_vblank,
+        options.texcheck_once, options.gl_vsync, options.unpaced);
+    std::fclose(out);
+}
 
 BootOptions readOptions()
 {
     BootOptions options;
     FILE *file = std::fopen(kOptions, "r");
     if (file == nullptr) {
-        if (FILE *out = std::fopen(kOptions, "w")) {
-            std::fputs("; DOA3 NX options (1 = on, 0 = off). Holding a button at boot also\n"
-                "; switches one for that run: X native_math off, Y texcheck_once on,\n"
-                "; ZL soft_vblank off, L gl_vsync on, R unpaced on.\n"
-                "native_math=1\nsoft_vblank=1\ntexcheck_once=0\ngl_vsync=0\nunpaced=0\n", out);
-            std::fclose(out);
-        }
+        writeOptions(options);
         return options;
     }
     char line[128];
@@ -361,9 +373,28 @@ BootOptions readOptions()
         else if (!std::strcmp(key, "texcheck_once")) options.texcheck_once = on;
         else if (!std::strcmp(key, "gl_vsync")) options.gl_vsync = on;
         else if (!std::strcmp(key, "unpaced")) options.unpaced = on;
+        else if (!std::strcmp(key, "widescreen")) options.widescreen = on;
+        else if (!std::strcmp(key, "resolution") && (value == 720 || value == 600 || value == 480))
+            options.resolution = value;
     }
     std::fclose(file);
     return options;
+}
+
+// Boot menu (boot_menu.cpp): the render resolution, every launch, the last
+// choice marked. It draws on its own framebuffer, so the text console lets go
+// of the window meanwhile and comes back for error screens afterwards.
+bool chooseResolution(PadState &pad, BootOptions &options)
+{
+    (void)pad;
+    consoleExit(nullptr);
+    console_ready = false;
+    const int height = doa3_nx_boot_menu(options.resolution, DOA3_NX_VERSION);
+    consoleInit(nullptr);
+    console_ready = true;
+    if (height == 0) return false;
+    options.resolution = height;
+    return true;
 }
 
 } // namespace
@@ -377,6 +408,9 @@ int main(int argc, char **argv)
     redirectStderrToLog();
     std::fprintf(stderr, "DOA3 NX %s (Toniisound), based on NoRain211/doa3-re\n",
         DOA3_NX_VERSION);
+#if defined(DOA3_NX_BUILD_INFO)
+    std::fprintf(stderr, "[nx] build: %s\n", DOA3_NX_BUILD_INFO);
+#endif
 
     // The boot stays on a black screen until the intro; the console only
     // shows text for a missing disc or a stop (see __wrap_exit).
@@ -391,6 +425,12 @@ int main(int argc, char **argv)
         return 0;
     }
 
+#if defined(DOA3_NX_PGO_GEN)
+    // Without the exit lock, HOME > Close kills the process outright and the
+    // profile is never written; with it, the close arrives as a normal exit.
+    appletLockExit();
+    std::fprintf(stderr, "[nx] PGO profile build: exit with HOME > Close or ZL+ZR+(-)+(+)\n");
+#endif
     // Options: sdmc:/switch/doa3-nx/doa3-nx.ini (written with the defaults on
     // the first run), or the same switches held at boot.
     BootOptions options = readOptions();
@@ -420,6 +460,9 @@ int main(int argc, char **argv)
     // soft_vblank: a frame a little over 16.7 ms starts the next one at once
     // instead of waiting a whole refresh (see d3d_vblank.cpp).
     if (options.soft_vblank) setenv("RECOMP_SOFT_VBLANK", "1", 1);
+    // widescreen: the Xbox's widescreen video flag; the game draws 16:9 and
+    // the renderer fills the screen (0: 4:3 with side bars).
+    if (options.widescreen) setenv("RECOMP_D3D_WIDESCREEN", "1", 1);
     // native_math: native versions of the hottest math helpers (doa3_nx_math.c).
     doa3_nx_native_enabled = options.native_math ? 1 : 0;
     // texcheck_once: check cached textures once a frame, not on every draw
@@ -427,8 +470,24 @@ int main(int argc, char **argv)
     if (options.texcheck_once) setenv("RECOMP_GL_TEXCHECK_ONCE", "1", 1);
     // gl_vsync: the render thread also waits for vblank (old double vsync).
     if (options.gl_vsync) setenv("RECOMP_GL_VSYNC", "1", 1);
-    std::fprintf(stderr, "[nx] options: native_math=%d soft_vblank=%d texcheck_once=%d gl_vsync=%d unpaced=%d\n",
-        options.native_math, options.soft_vblank, options.texcheck_once, options.gl_vsync, options.unpaced);
+    if (!chooseResolution(pad, options)) {
+        std::fprintf(stderr, "[nx] left from the boot menu\n");
+        consoleExit(nullptr);
+        console_ready = false;
+        return 0;
+    }
+    writeOptions(options); // remembers the choice for the next menu
+    {
+        // The game renders 640x480; the presenter scales it to this height.
+        char scale[16];
+        std::snprintf(scale, sizeof scale, "%.4f", options.resolution / 480.0);
+        setenv("RECOMP_D3D_SCALE", scale, 1);
+    }
+    std::printf("\x1b[2J");
+    consoleUpdate(nullptr);
+    std::fprintf(stderr, "[nx] resolution: %dp\n", options.resolution);
+    std::fprintf(stderr, "[nx] options: widescreen=%d native_math=%d soft_vblank=%d texcheck_once=%d gl_vsync=%d unpaced=%d\n",
+        options.widescreen, options.native_math, options.soft_vblank, options.texcheck_once, options.gl_vsync, options.unpaced);
     consoleUpdate(nullptr);
     mutexInit(&console_mutex);
 

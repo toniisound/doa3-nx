@@ -939,6 +939,67 @@ static int run_doa3_skip_legal_notice(uint8_t *ram)
     return passed;
 }
 
+static int run_doa3_select_next_request(uint8_t *ram)
+{
+    enum { ENTRY_ESP = 0x00100000u, SLOTS = 0x00860ff0u };
+    RecompMemoryRegion region = full_ram_region(ram);
+    int passed = 1;
+
+    memset(ram, 0, RECOMP_XBOX_RAM_SIZE);
+    recomp_runtime_init(&region, 1u, NULL, 0u, NULL, 0u);
+    *recomp_memory_u32(ENTRY_ESP + 28u) = 0x000cd087u;
+    *recomp_memory(SLOTS + 2u * 32u, 1u) = 1u;
+    recomp_runtime.registers.edi = 3u;
+
+    /* Idle on empty slot 3: jump the cursor to pending slot 2 (wrapping). */
+    passed &= expect_u32("select request", "advance",
+        recomp_doa3_select_next_request(ENTRY_ESP), 1u);
+    passed &= expect_u32("select request", "cursor", recomp_runtime.registers.edi, 2u);
+
+    /* The cursor is on the pending slot now: leave it for the game. */
+    passed &= expect_u32("select request", "on pending",
+        recomp_doa3_select_next_request(ENTRY_ESP), 0u);
+
+    /* A load in flight (saved EBP nonzero) keeps the game's own order. */
+    recomp_runtime.registers.edi = 0u;
+    *recomp_memory_u32(ENTRY_ESP + 24u) = 1u;
+    passed &= expect_u32("select request", "in flight",
+        recomp_doa3_select_next_request(ENTRY_ESP), 0u);
+    passed &= expect_u32("select request", "in flight cursor", recomp_runtime.registers.edi, 0u);
+
+    /* Nothing pending, or another yield site: untouched. */
+    *recomp_memory_u32(ENTRY_ESP + 24u) = 0u;
+    *recomp_memory(SLOTS + 2u * 32u, 1u) = 0u;
+    passed &= expect_u32("select request", "idle",
+        recomp_doa3_select_next_request(ENTRY_ESP), 0u);
+    *recomp_memory(SLOTS + 2u * 32u, 1u) = 1u;
+    *recomp_memory_u32(ENTRY_ESP + 28u) = 0x00022337u;
+    passed &= expect_u32("select request", "other caller",
+        recomp_doa3_select_next_request(ENTRY_ESP), 0u);
+    return passed;
+}
+
+static int run_doa3_skip_done_file_wait(uint8_t *ram)
+{
+    enum { ENTRY_ESP = 0x00100000u };
+    RecompMemoryRegion region = full_ram_region(ram);
+    int passed = 1;
+
+    memset(ram, 0, RECOMP_XBOX_RAM_SIZE);
+    recomp_runtime_init(&region, 1u, NULL, 0u, NULL, 0u);
+    *recomp_memory_u32(ENTRY_ESP + 28u) = 0x0007e8adu;
+    recomp_runtime.registers.ebx = 0xabcd0001u;
+    passed &= expect_u32("file wait", "file still loading",
+        recomp_doa3_skip_done_file_wait(ENTRY_ESP), 0u);
+    recomp_runtime.registers.ebx = 0xabcd0000u;
+    passed &= expect_u32("file wait", "file closed",
+        recomp_doa3_skip_done_file_wait(ENTRY_ESP), 1u);
+    *recomp_memory_u32(ENTRY_ESP + 28u) = 0x000cd087u;
+    passed &= expect_u32("file wait", "other caller",
+        recomp_doa3_skip_done_file_wait(ENTRY_ESP), 0u);
+    return passed;
+}
+
 static int run_ram_pending_ohci(void)
 {
     uint8_t *ram = calloc_ram_fixture();
@@ -1002,6 +1063,8 @@ int main(int argc, char **argv)
         passed &= run_ram_access_logging(ram);
         passed &= run_reinit_clears_direct_cache(ram);
         passed &= run_doa3_skip_legal_notice(ram);
+        passed &= run_doa3_select_next_request(ram);
+        passed &= run_doa3_skip_done_file_wait(ram);
         recomp_runtime_init(NULL, 0u, NULL, 0u, NULL, 0u);
         free(ram);
     }

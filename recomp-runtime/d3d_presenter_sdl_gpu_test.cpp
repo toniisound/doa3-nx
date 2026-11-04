@@ -8,7 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
+#include <unistd.h>
 
 static const RecompD3dPresenterConfig kTestConfig = {
     320u, 240u,
@@ -250,6 +252,94 @@ static bool testDraw()
     if (passed) {
         std::puts("PASS testDraw");
     }
+    return passed;
+}
+
+// Stage 0 samples at the generated reflection coordinate instead of UV0.
+// The frame dump reads the back buffer back as a bottom-up 24-bit BMP.
+static bool testReflectionTexgen()
+{
+    RecompD3dPresenter *presenter = nullptr;
+    if (!expect("create for texgen", recomp_d3d_presenter_create(&kTestConfig, &presenter))) {
+        return false;
+    }
+    struct Vertex { float position[3], normal[3], uv[2]; };
+    Vertex vertices[4];
+    for (uint32_t i = 0; i < 4; ++i) {
+        vertices[i] = {{i & 1u ? 1.0f : -1.0f, i & 2u ? -1.0f : 1.0f, 0.5f}, {1, 0, 0}, {0.25f, 0}};
+    }
+    const uint16_t indices[] = {0, 1, 2, 3};
+    const uint32_t environment[] = {0xffff0000u, 0xff00ff00u};
+    auto clear = clearCommand();
+    bool passed = expect("texgen clear", recomp_d3d_presenter_submit(presenter, &clear));
+
+    RecompD3dPresenterCommand draw_cmd{};
+    draw_cmd.type = RECOMP_D3D_PRESENTER_COMMAND_DRAW;
+    auto &draw = draw_cmd.data.draw;
+    draw.primitive_type = RECOMP_D3D_PT_TRIANGLESTRIP;
+    draw.index_count = draw.vertex_count = 4;
+    draw.triangle_count = 2;
+    draw.vertex_stride = sizeof(Vertex);
+    draw.fvf = 0x112u;
+    draw.vertex_bytes = vertices;
+    draw.index_bytes = indices;
+    draw.blend.color_write_mask = 15;
+    draw.has_texture = draw.has_transform = draw.reflection_texgen = true;
+    for (uint32_t i = 0; i < 4; ++i) draw.transform[i * 5] = draw.reflection_normal[i * 5] = 1;
+    draw.reflection_world_view[14] = draw.reflection_world_view[15] = 1; // eye (0,0,1)
+    draw.reflection_transform[8] = 0.25f;  // u = 0.25 * r.z + 0.5
+    draw.reflection_transform[12] = 0.5f;
+    draw.texture.data = 0x00670000u;
+    draw.texture.format_byte = RECOMP_D3D_TEXTURE_FORMAT_A8R8G8B8;
+    draw.texture.bits_per_pixel = 32;
+    draw.texture.width = 2;
+    draw.texture.height = 1;
+    draw.texture_bytes = environment;
+    draw.texture_byte_count = sizeof environment;
+    passed &= expect("submit texgen draw", recomp_d3d_presenter_submit(presenter, &draw_cmd));
+
+    const char *tmp = std::getenv("TMPDIR");
+    std::string path = std::string(tmp && *tmp ? tmp : "/tmp") + "/recomp_texgen_XXXXXX";
+    const int fd = mkstemp(path.data());
+    if (fd < 0) {
+        std::fprintf(stderr, "FAIL texgen dump file\n");
+        recomp_d3d_presenter_destroy(&presenter);
+        return false;
+    }
+    close(fd);
+    const char *dump = path.c_str();
+    setenv("RECOMP_D3D_FRAME_DUMP", dump, 1);
+    unsetenv("RECOMP_D3D_FRAME_DUMP_AT");
+    unsetenv("RECOMP_D3D_FRAME_DUMP_COUNT");
+    unsetenv("RECOMP_D3D_FRAME_DUMP_INTERVAL_MS");
+    RecompD3dPresenterCommand present{};
+    present.type = RECOMP_D3D_PRESENTER_COMMAND_PRESENT;
+    present.data.present = {5u, 1u};
+    passed &= expect("texgen present", recomp_d3d_presenter_submit(presenter, &present));
+    unsetenv("RECOMP_D3D_FRAME_DUMP");
+    passed &= expect("destroy after texgen", recomp_d3d_presenter_destroy(&presenter));
+
+    // UV0 0.25 would sample red; the reflected (0,0,1) lands on green.
+    uint8_t header[54] = {}, bgr[3] = {};
+    FILE *file = std::fopen(dump, "rb");
+    bool read = file && std::fread(header, 1, sizeof header, file) == sizeof header;
+    if (read) {
+        int32_t width, height;
+        uint32_t offset;
+        std::memcpy(&offset, header + 10, 4);
+        std::memcpy(&width, header + 18, 4);
+        std::memcpy(&height, header + 22, 4);
+        const long row = static_cast<long>((width * 3 + 3) & ~3);
+        read = std::fseek(file, static_cast<long>(offset) + row * (height / 2) + (width / 2) * 3, SEEK_SET) == 0 &&
+            std::fread(bgr, 1, 3, file) == 3;
+    }
+    if (file) std::fclose(file);
+    std::remove(dump);
+    if (!read || bgr[0] > 8 || bgr[1] < 247 || bgr[2] > 8) {
+        std::fprintf(stderr, "FAIL texgen pixel read=%d bgr=%u,%u,%u\n", read, bgr[0], bgr[1], bgr[2]);
+        passed = false;
+    }
+    if (passed) std::puts("PASS testReflectionTexgen");
     return passed;
 }
 
@@ -587,7 +677,7 @@ int main()
     setenv("RECOMP_HEADLESS", "1", 1);
     recomp_d3d_presenter_set_immediate_present(false);
 
-    if (!testCreateAndTicks() || !testDraw() || !testMsaa() || !testClose() ||
+    if (!testCreateAndTicks() || !testDraw() || !testReflectionTexgen() || !testMsaa() || !testClose() ||
         !testReleaseTargets() || !testReplaceQueuedTexture() || !testGamma() ||
         !testBudgetDeclinesDraw() || !testSampleActiveTargetDeclines()) {
         std::fprintf(stderr, "SDL_GPU presenter tests failed!\n");

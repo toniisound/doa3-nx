@@ -296,6 +296,10 @@ static void enter_collection_screen(void)
    moving it into the DOA3 group. */
 RecompFunction recomp_lookup_manual(uint32_t guest_address)
 {
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    guest_address = recomp_doa3_jp_usa_address(guest_address);
+    if (guest_address == 0u) return NULL;
+#endif
 #ifndef RECOMP_DOAXBV_BINDINGS
 #ifdef RECOMP_FULL_PROGRAM
     /* Temporary game seam: only the boundary exemption pair is handwritten.

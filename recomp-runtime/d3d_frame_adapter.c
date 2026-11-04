@@ -27,7 +27,21 @@ void (*recomp_d3d_present_hook)(uint32_t swap_counter);
 enum {
     D3D_DEVICE_CLEAR_ADDRESS = 0x001b3390u,
     D3D_DEVICE_PRESENT_ADDRESS = 0x001b5850u,
+    /* Japan 3.1 (D3D8 4134) calls Swap where the USA build calls Present. */
+    D3D_DEVICE_SWAP_4134_ADDRESS = 0x001e14d0u,
     D3D_DEVICE_SET_GAMMA_ADDRESS = 0x001b0e00u,
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    /* D3D8 4134 (Japan 3.1): surfaces stay embedded, but GetBackBuffer reads
+       a pointer table that Swap rotates, and the back-buffer size is only in
+       the surface; see docs/doa3-jp-test.md. */
+    D3D_DEVICE_RENDER_TARGET = 0x2070u,
+    D3D_DEVICE_DEPTH_STENCIL = 0x2074u,
+    D3D_DEVICE_BACK_BUFFER_TABLE = 0x207cu,
+    D3D_DEVICE_AUTO_DEPTH = 0x20d4u,
+    D3D_DEVICE_STATIC_ADDRESS = 0x001eb3a0u,
+    D3D_DEVICE_FRAME_COUNTER = 0x2abcu,
+    D3D_SURFACE_SIZE = 0x10u,
+#else
     D3D_DEVICE_RENDER_TARGET = 0x040cu,
     D3D_DEVICE_DEPTH_STENCIL = 0x0410u,
     /* Embedded surface objects, not pointers: GetBackBuffer(0) and the
@@ -41,6 +55,7 @@ enum {
     D3D_DEVICE_STATIC_ADDRESS = 0x001c0800u,
     /* Incremented by every guest Present; SetGammaRamp reads its low bit. */
     D3D_DEVICE_FRAME_COUNTER = 0x2b60u,
+#endif
 };
 
 static RecompD3dFrameState frame_state;
@@ -137,7 +152,12 @@ bool recomp_d3d_frame_adapter_target(RecompD3dPresenterTarget *target)
     *target = (RecompD3dPresenterTarget){0};
     color = *recomp_memory_u32(
         frame_device_address + D3D_DEVICE_RENDER_TARGET);
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    back = *recomp_memory_u32(
+        frame_device_address + D3D_DEVICE_BACK_BUFFER_TABLE);
+#else
     back = frame_device_address + D3D_DEVICE_BACK_BUFFER;
+#endif
     depth = *recomp_memory_u32(
         frame_device_address + D3D_DEVICE_DEPTH_STENCIL);
     default_depth = frame_device_address + D3D_DEVICE_AUTO_DEPTH;
@@ -231,10 +251,22 @@ static void ensure_initialized(void)
     if (frame_state.initialized) {
         return;
     }
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    {
+        /* D3DSIZE: width - 1 in bits 0-11, height - 1 in bits 12-23. */
+        const uint32_t back = *recomp_memory_u32(
+            D3D_DEVICE_STATIC_ADDRESS + D3D_DEVICE_BACK_BUFFER_TABLE);
+        const uint32_t size = *recomp_memory_u32(back + D3D_SURFACE_SIZE);
+
+        config.width = (size & 0xfffu) + 1u;
+        config.height = ((size >> 12) & 0xfffu) + 1u;
+    }
+#else
     config.width = *recomp_memory_u32(
         D3D_DEVICE_STATIC_ADDRESS + D3D_DEVICE_BACK_BUFFER_WIDTH);
     config.height = *recomp_memory_u32(
         D3D_DEVICE_STATIC_ADDRESS + D3D_DEVICE_BACK_BUFFER_HEIGHT);
+#endif
     recomp_d3d_frame_adapter_initialize(&config, D3D_DEVICE_STATIC_ADDRESS);
 }
 
@@ -317,25 +349,26 @@ static void present_frame(uint32_t entry_esp, RecompD3dFrameResult result)
     }
 
     /* Opt-in caller trace: RECOMP_D3D_WHOCALLS prints the dispatch chain
-       that reached this present for the first 240 frames. */
+       that reached this present whenever it changes (400 lines at most). */
     {
         static const char *who_trace;
         static bool who_trace_read;
         static uint32_t who_trace_lines;
+        static char last_chain[512];
 
         if (!who_trace_read) {
             who_trace_read = true;
             who_trace = getenv("RECOMP_D3D_WHOCALLS");
         }
-        if (who_trace != NULL && who_trace_lines < 240u) {
+        if (who_trace != NULL && who_trace_lines < 400u) {
             /* Generated calls push 0 in place of a return address, so walk
                the dispatch stack instead of the guest stack. */
-            char chain[192];
+            char chain[512];
             size_t used = 0u;
             size_t depth;
 
             chain[0] = '\0';
-            for (depth = 0u; depth < 6u; ++depth) {
+            for (depth = 0u; depth < 16u; ++depth) {
                 uint32_t target = 0u;
                 const char *member = NULL;
                 int line = 0;
@@ -357,14 +390,17 @@ static void present_frame(uint32_t entry_esp, RecompD3dFrameResult result)
                 }
                 used += (size_t)written;
             }
-            ++who_trace_lines;
-            fprintf(
-                stderr,
-                "recomp d3d whocalls: frame=%lu esp=%08" PRIx32
-                " chain=%s\n",
-                (unsigned long)result.command.data.present.swap_counter,
-                entry_esp,
-                chain);
+            if (strcmp(chain, last_chain) != 0) {
+                memcpy(last_chain, chain, sizeof chain);
+                ++who_trace_lines;
+                fprintf(
+                    stderr,
+                    "recomp d3d whocalls: frame=%lu esp=%08" PRIx32
+                    " chain=%s\n",
+                    (unsigned long)result.command.data.present.swap_counter,
+                    entry_esp,
+                    chain);
+            }
         }
     }
 
@@ -420,6 +456,8 @@ static void present_frame(uint32_t entry_esp, RecompD3dFrameResult result)
         unsigned long dump_at = at_text != NULL ? strtoul(at_text, NULL, 10) : 0ul;
 #ifdef RECOMP_DOAXBV_BINDINGS
         const uint32_t transform_base = 0x0810u;
+#elif defined(RECOMP_DOA3_JP_BINDINGS)
+        const uint32_t transform_base = 0x0750u; /* 4134 SetTransform */
 #else
         /* 3925 SetTransform (0x001B0EC0): device + 0x880 + 0x40 * state;
            0 view, 1 projection, 6 world. */
@@ -486,6 +524,17 @@ void recomp_d3d_present_adapter(void)
     recomp_runtime.registers.esp = entry_esp + 20u;
 }
 
+/* HRESULT __stdcall D3DDevice_Swap(Flags): ret 4. */
+static void swap_adapter(void)
+{
+    uint32_t entry_esp = recomp_runtime.registers.esp;
+
+    ensure_initialized();
+    present_frame(entry_esp, recomp_d3d_frame_present(&frame_state, 0u, 0u));
+    recomp_runtime.registers.eax = 0u; /* D3D_OK */
+    recomp_runtime.registers.esp = entry_esp + 8u;
+}
+
 static void block_until_vertical_blank(void)
 {
     const uint32_t entry_esp = recomp_runtime.registers.esp;
@@ -529,6 +578,8 @@ RecompFunction recomp_d3d_frame_lookup_manual(uint32_t guest_address)
         return block_until_vertical_blank;
     case D3D_DEVICE_PRESENT_ADDRESS:
         return recomp_d3d_present_adapter;
+    case D3D_DEVICE_SWAP_4134_ADDRESS:
+        return swap_adapter;
     default:
         return NULL;
     }

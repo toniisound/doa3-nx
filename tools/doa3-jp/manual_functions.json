@@ -1,0 +1,126 @@
+[
+ "0x001DC660",
+ "0x001DC360",
+ "0x001DF010",
+ {
+  "address": "0x001E14D0",
+  "note": "XDK 4134 D3DDevice_Swap stands in for USA D3DDevice_Present; arguments differ"
+ },
+ "0x001DF490",
+ "0x001DF5F0",
+ "0x001DF690",
+ "0x001DD670",
+ "0x001E0310",
+ "0x001DFF50",
+ "0x001DD880",
+ "0x001DDEB0",
+ "0x001DE080",
+ "0x001DE150",
+ "0x001DE200",
+ "0x001DE240",
+ "0x001DE470",
+ "0x001DEC40",
+ "0x001DECE0",
+ "0x001DED70",
+ "0x001DEF50",
+ "0x00210B6C",
+ "0x00211578",
+ "0x0021157D",
+ "0x0021159F",
+ "0x00211823",
+ "0x00211898",
+ "0x002118A4",
+ "0x00211A96",
+ "0x00211B07",
+ "0x001E27C0",
+ "0x001E57ED",
+ "0x001E5283",
+ "0x001E52E6",
+ "0x001E5623",
+ "0x001E56F2",
+ "0x001E4758",
+ "0x001E594F",
+ "0x001E5B3D",
+ "0x001E2790",
+ "0x001F2E65",
+ "0x001F1F01",
+ "0x001F1D46",
+ "0x001F1D62",
+ "0x001F29BD",
+ "0x001F29F2",
+ "0x001F23CC",
+ "0x001F2A27",
+ "0x001F2CAB",
+ "0x001F13AF",
+ "0x001F1D89",
+ {
+  "address": "0x001F1DDD",
+  "note": "XDK 4134 IDirectSoundBuffer_SetMixBinVolumes takes LPCDSMIXBINS (USA _12 takes mask + array)"
+ },
+ "0x001F2400",
+ "0x001F2424",
+ "0x001F2459",
+ "0x001F1E35",
+ "0x001F1E59",
+ "0x001F1E79",
+ "0x001F1E95",
+ "0x001F1EB5",
+ "0x001F1ED1",
+ "0x001F23E4",
+ {
+  "address": "0x001F1DC1",
+  "note": "XDK 4134 IDirectSoundBuffer_SetMixBins takes LPCDSMIXBINS (USA takes a DWORD mask)"
+ },
+ "0x001F1DF9",
+ "0x001F1E1D",
+ "0x001F2A47",
+ {
+  "address": "0x001927D0",
+  "note": "CRI ADXM main worker lifecycle"
+ },
+ {
+  "address": "0x0018C934",
+  "note": "FIBER: CreateFiber"
+ },
+ {
+  "address": "0x0018C9C0",
+  "note": "FIBER: DeleteFiber"
+ },
+ {
+  "address": "0x0018C9D3",
+  "note": "FIBER: SwitchToFiber"
+ },
+ {
+  "address": "0x0018CA12",
+  "note": "FIBER: ConvertThreadToFiber"
+ },
+ "0x001DD950",
+ {
+  "address": "0x001A3480",
+  "note": "MOVIE: Sofdec planar 4:2:0 to linear BGRA"
+ },
+ {
+  "address": "0x001F13C5",
+  "note": "audio: DirectSoundUseFullHRTF"
+ },
+ {
+  "address": "0x001F13A5",
+  "note": "audio: DirectSound SetCooperativeLevel (retail no-op)"
+ },
+ {
+  "address": "0x001F13AA",
+  "note": "audio: DirectSoundBuffer Unlock (retail no-op)"
+ },
+ {
+  "address": "0x001926F0",
+  "note": "av: CRI ADXM vblank worker A"
+ },
+ {
+  "address": "0x00192760",
+  "note": "av: CRI ADXM vblank worker B"
+ },
+ {
+  "address": "0x001F1DA5",
+  "note": "DSOUND 4134 IDirectSoundBuffer_SetHeadroom; no USA counterpart"
+ }
+]

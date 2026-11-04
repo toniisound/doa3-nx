@@ -1,6 +1,7 @@
 #include "d3d_draw_model.h"
 #include "runtime.h"
 
+#include <float.h>
 #include <stdio.h>
 
 /* The draw adapter delegates to the guest's generated driver body. The unit
@@ -213,6 +214,54 @@ int recomp_d3d_draw_model_test(void)
         "point list rejected",
         result.error,
         RECOMP_D3D_DRAW_UNSUPPORTED_PRIMITIVE);
+
+    {
+        /* A 14-pixel name strip mapped 1:1 onto rows 0-13 of a 256-row atlas
+           samples rows 0.5-13.5 natively; row 14 belongs to the next name. */
+        float quad[4][6] = {
+            {215.5f, 270.5f, 0.0f, 1.0f, 0.0f, 0.0f},
+            {215.5f, 284.5f, 0.0f, 1.0f, 0.0f, 14.0f / 256.0f},
+            {340.5f, 284.5f, 0.0f, 1.0f, 125.0f / 128.0f, 14.0f / 256.0f},
+            {340.5f, 270.5f, 0.0f, 1.0f, 125.0f / 128.0f, 0.0f},
+        };
+        float bounds[4];
+        recomp_d3d_quad_texcoord_clamp(quad, sizeof quad[0], 4u, 16u, bounds);
+        passed &= expect_u32("quad clamp v min", bounds[1] == 0.5f / 256.0f, 1u);
+        passed &= expect_u32("quad clamp v max", bounds[3] == 13.5f / 256.0f, 1u);
+        passed &= expect_u32("quad clamp u max", bounds[2] == 124.5f / 128.0f, 1u);
+
+        /* Texcoords turned a quarter against the screen: leave sampling open. */
+        quad[0][4] = 125.0f / 128.0f;
+        quad[2][4] = 0.0f;
+        recomp_d3d_quad_texcoord_clamp(quad, sizeof quad[0], 4u, 16u, bounds);
+        passed &= expect_u32("rotated quad open", bounds[1] == -FLT_MAX, 1u);
+    }
+
+    {
+        /* One scaled sprite 10 units ahead: 480 * 0.5 / sqrt(10 * 10) = 24
+           pixels, so half a quad is 24 * w / (viewport * P) view units. */
+        const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        const float projection[16] = {2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 1, 0, 0, -0.1f, 0};
+        const float point[3] = {0.0f, 0.0f, 10.0f};
+        const uint16_t first = 0u;
+        RecompD3dPointState points = {0.5f, 2.0f, 64.0f, {0.0f, 0.0f, 1.0f}, true, true};
+        RecompD3dVertexLayout layout;
+        float quad[4][5];
+        uint16_t indices[6];
+        recomp_d3d_fvf_layout(0x002u, &layout);
+        passed &= expect_u32("point fvf", recomp_d3d_point_quads(&points, (const uint8_t *)point,
+            12u, &layout, &first, 1u, 0u, identity, projection, 640.0f, 480.0f,
+            (uint8_t *)quad, indices), 0x102u);
+        passed &= expect_u32("point top left", quad[0][0] == -0.1875f && quad[0][1] == 0.25f &&
+            quad[0][2] == 10.0f && quad[0][3] == 0.0f && quad[0][4] == 0.0f, 1u);
+        passed &= expect_u32("point bottom right", quad[3][0] == 0.1875f && quad[3][1] == -0.25f &&
+            quad[3][3] == 1.0f && quad[3][4] == 1.0f, 1u);
+        passed &= expect_u32("point indices", indices[3] == 2u && indices[4] == 1u && indices[5] == 3u, 1u);
+        points.size_max = 16.0f;
+        recomp_d3d_point_quads(&points, (const uint8_t *)point, 12u, &layout, &first, 1u, 0u,
+            identity, projection, 640.0f, 480.0f, (uint8_t *)quad, indices);
+        passed &= expect_u32("point max clamp", quad[0][1] == 16.0f * 10.0f / 960.0f, 1u);
+    }
 
     state.stream0.vertex_data = 0u;
     result = recomp_d3d_draw_indexed(

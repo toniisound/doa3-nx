@@ -2036,8 +2036,13 @@ static void bridge_nt_write_file(void)
     kernel_return(8u, status);
 }
 
+static uint32_t read_count;
+
+uint32_t recomp_kernel_read_count(void) { return read_count; }
+
 static void bridge_nt_read_file(void)
 {
+    ++read_count;
     uint32_t guest_handle = kernel_arg(1u);
     uint32_t io_status_block = kernel_arg(5u);
     uint32_t buffer = kernel_arg(6u);

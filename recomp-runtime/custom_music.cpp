@@ -45,6 +45,31 @@ uint32_t total_ms;
 DWORD com_thread;
 bool com_initialized, mf_initialized;
 
+// Loaded at run time so Windows N editions without Media Foundation still run.
+decltype(&MFStartup) mf_startup;
+decltype(&MFShutdown) mf_shutdown;
+decltype(&MFCreateMediaType) mf_create_media_type;
+decltype(&MFCreateSourceReaderFromURL) mf_create_source_reader;
+
+template <typename Function>
+bool resolve(HMODULE module, const char *name, Function &function)
+{
+    function = reinterpret_cast<Function>(reinterpret_cast<void *>(GetProcAddress(module, name)));
+    return function != nullptr;
+}
+
+DWORD load_media_foundation()
+{
+    const HMODULE plat = LoadLibraryW(L"mfplat.dll");
+    const HMODULE readwrite = plat ? LoadLibraryW(L"mfreadwrite.dll") : nullptr;
+    if (!readwrite) return GetLastError();
+    return resolve(plat, "MFStartup", mf_startup) &&
+        resolve(plat, "MFShutdown", mf_shutdown) &&
+        resolve(plat, "MFCreateMediaType", mf_create_media_type) &&
+        resolve(readwrite, "MFCreateSourceReaderFromURL", mf_create_source_reader)
+        ? ERROR_SUCCESS : ERROR_PROC_NOT_FOUND;
+}
+
 void report(const char *what, const wchar_t *path, HRESULT error)
 {
     std::fprintf(stderr, "[custom-music] %s file=\"%ls\" error=0x%08lx\n",
@@ -61,14 +86,14 @@ const Track *find(uint32_t id)
 std::unique_ptr<RecompMusicDecoder> open_file(const wchar_t *path, HRESULT &error)
 {
     auto decoder = std::make_unique<RecompMusicDecoder>();
-    error = MFCreateSourceReaderFromURL(path, nullptr, &decoder->reader);
+    error = mf_create_source_reader(path, nullptr, &decoder->reader);
     if (FAILED(error)) return nullptr;
     auto *reader = decoder->reader.Get();
     error = reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
     if (SUCCEEDED(error))
         error = reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
     ComPtr<IMFMediaType> type;
-    if (SUCCEEDED(error)) error = MFCreateMediaType(&type);
+    if (SUCCEEDED(error)) error = mf_create_media_type(&type);
     if (SUCCEEDED(error)) error = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
     if (SUCCEEDED(error)) error = type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
     if (SUCCEEDED(error)) error = type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
@@ -168,10 +193,8 @@ extern "C" void recomp_music_initialize(const char *folder_path)
     if (!folder_path) return;
     const auto started = std::chrono::steady_clock::now();
     const fs::path folder(folder_path);
-    // Delay-loaded so Windows N editions without Media Foundation still run.
-    // Loaded once; delay-loaded imports keep them for the process anyway.
-    static const DWORD load_error = LoadLibraryW(L"mfplat.dll") &&
-        LoadLibraryW(L"mfreadwrite.dll") ? ERROR_SUCCESS : GetLastError();
+    // Loaded once and kept for the process.
+    static const DWORD load_error = load_media_foundation();
     if (load_error != ERROR_SUCCESS) {
         report("disabled", folder.c_str(), HRESULT_FROM_WIN32(load_error));
         return;
@@ -180,7 +203,7 @@ extern "C" void recomp_music_initialize(const char *folder_path)
     if (FAILED(error)) { report("disabled", folder.c_str(), error); return; }
     com_initialized = true;
     com_thread = GetCurrentThreadId();
-    error = MFStartup(MF_VERSION);
+    error = mf_startup(MF_VERSION, MFSTARTUP_FULL);
     if (FAILED(error)) { report("disabled", folder.c_str(), error); return; }
     mf_initialized = true;
     try {
@@ -205,7 +228,7 @@ extern "C" void recomp_music_shutdown(void)
 {
     tracks.clear();
     total_ms = 0;
-    if (mf_initialized) MFShutdown();
+    if (mf_initialized) mf_shutdown();
     // COM initialization is per thread; only the initializing thread may undo it.
     if (com_initialized && com_thread == GetCurrentThreadId()) CoUninitialize();
     mf_initialized = com_initialized = false;

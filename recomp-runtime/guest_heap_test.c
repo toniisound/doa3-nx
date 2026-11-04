@@ -32,8 +32,10 @@ int main(void)
         xbox_ContiguousAlloc(0x10000u, 0x1000000u, UINT32_MAX, 0x1000u) != 0u ||
         xbox_ContiguousAlloc(0x10000u, 0u, UINT32_MAX, 0x1000u) !=
             (0x80000000u | (XBOX_KERNEL_DATA_BASE - 0x10000u)) ||
+        /* A full heap continues in the gap too. */
+        xbox_HeapAlloc(0x1000u, 0x1000u) != XBOX_KERNEL_DATA_BASE - 0x11000u ||
         xbox_ContiguousAlloc(0x10000u, 0u, UINT32_MAX, 0x1000u) != 0u ||
-        xbox_ContiguousAlloc(0xf000u, 0u, XBOX_KERNEL_DATA_BASE - 0x10001u, 0x1000u) !=
+        xbox_ContiguousAlloc(0xe000u, 0u, XBOX_KERNEL_DATA_BASE - 0x10001u, 0x1000u) !=
             (0x80000000u | (XBOX_KERNEL_DATA_BASE - 0x1f000u)) ||
         xbox_ContiguousAlloc(1u, 0u, UINT32_MAX, 0x1000u) != 0u) {
         fprintf(stderr, "guest heap: image-gap allocation crossed a live boundary\n");

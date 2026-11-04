@@ -201,6 +201,13 @@ int main()
     CHECK(packet.command(5).data.draw.directional.ambient[7][0] == 0.25f);
     CHECK(packet.command(6).data.draw.texture_bytes == sources[2].data());
     CHECK(packet.command(6).data.draw.vertex_bytes != sources[0].data());
+
+    const auto used = packet.size();
+    CHECK(used.entries == 8u && used.commands == 6u);
+    packet.clear();
+    packet.reserve({used.entries * 2u, used.commands * 2u, used.payload_words * 2u, used.spans * 2u});
+    CHECK(packet.count() == 0u && packet.bytes() == 0u);
+    CHECK(packet.add(value) == RECOMP_D3D_PRESENTER_OK && packet.count() == 1u);
     std::puts("PASS capture ownership, order, deduplication, overflow, alignment, move and reuse");
     return 0;
 }

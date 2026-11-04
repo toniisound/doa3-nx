@@ -32,6 +32,20 @@ Disassembly takes every code section (no `--text-only`), because D3D, DSOUND and
 XPP code lives outside `.text`. No recipe, recoveries, func_id or ABI input
 were used; the empty paths keep stale lifter output out.
 
+`tools/build_game.py` skips the disassembly: it lifts from the recipe's stored
+`functions.json.gz` (`tools/doa3`, `tools/doa3-jp`) with no labels, which gives
+the same program. When the lifter pin or a seed list changes, disassemble as
+above and store the new list, also from `tools/xboxrecomp`:
+
+```powershell
+python -c "import gzip, sys; open(sys.argv[2], 'wb').write(gzip.compress(open(sys.argv[1], 'rb').read(), 9, mtime=0))" `
+  ../../private/lift/disasm-seed/functions.json ../../tools/doa3/functions.json.gz
+```
+
+For Japan 3.1, disassemble the Japan XBE with `tools/doa3-jp/seed_functions.json`
+and write `../../tools/doa3-jp/functions.json.gz`. Then update the list's hash
+in `public-export.json`.
+
 | Result | Value |
 |---|---|
 | Functions | 7,099 from disassembly, 7,146 after callback recovery and manual-entry handling |
@@ -118,11 +132,15 @@ The manifest is computed the way doaxbv-re's `build_game.py` does it: one
 `recomp_funcs.h`, hashed with SHA-256.
 
 ```powershell
-cmake -S recomp-runtime -B build/recomp-program -G "Visual Studio 17 2022" -A x64 `
+# Put llvm-mingw and CMake on PATH, downloading them into private/ the first time.
+$env:PATH = (python -c "import os, sys; sys.path.insert(0, 'tools'); import build_game; print(os.pathsep.join(map(str, build_game.windows_tools())))" | Select-Object -Last 1) + ";$env:PATH"
+# CMake cannot change a build folder's generator: delete a Visual Studio or Ninja build/recomp-program first.
+cmake -S recomp-runtime -B build/recomp-program -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
   -DRECOMP_PROGRAM_DIR=private/lift-init2/generated `
   -DRECOMP_PROGRAM_MANIFEST_SHA256=<manifest sha256> `
   -DRECOMP_PROGRAM_EBP_EXPECTED=0
-cmake --build build/recomp-program --config Debug --target recomp_program_runner
+cmake --build build/recomp-program --target recomp_program_runner
 ```
 
 `RECOMP_PROGRAM_EBP_EXPECTED` is 0: upstream's emitter initializes `ebp` itself,
@@ -180,11 +198,11 @@ directory off the include path, so generated code includes the runtime's header.
 - `recomp_debug_service` (`int 0x2d` DbgPrint) prints to stderr.
 - Every costume and character is offered. The save block holds one byte per character at
   `0x00487806`: the costume tiers earned (new saves start at 2, the maximum
-  is 3). The select screen reads `min(byte, the character's tier count)`.
-  `recomp_save_unlock_all()` (`save_adapter.c`) sets all 19 bytes to 3 and the
-  extra-characters flag at `0x00488837` to 1 on every Present, so new and
-  loaded saves both show every tier, and the next auto-save stores them.
-  Verified in a RAM dump: 19 bytes of 03 at that address.
+  is 3 on USA and 5 on Japan 3.1). The select screen reads `min(byte, the
+  slot's tier count)`. `recomp_save_unlock_all()` (`save_adapter.c`) raises
+  each byte to its slots' largest count from the game's own table, and sets
+  the extra-characters flag at `0x00488837` to 1, on every Present, so new
+  and loaded saves both show every tier, and the next auto-save stores them.
 - `KeQueryPerformanceCounter` (126) and `KeQueryPerformanceFrequency` (127) are
   served from the existing XAPI time model. DOA3 imports them; DOAXBV did not.
   `KeQueryInterruptTime` (125) is derived from the same counter, and

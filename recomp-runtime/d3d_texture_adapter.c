@@ -1,4 +1,5 @@
 #include "d3d_texture_adapter.h"
+#include "doa3_build.h"
 #include "stop_report.h"
 
 #include <inttypes.h>
@@ -24,22 +25,29 @@ enum {
     D3D_TEXTURE_FORMAT_DIRTY = 0x4000u,
 };
 #else
+/* Japan values are D3D8 4134 (0x001DD670, 0x001DFF50, 0x001DD880). */
 enum {
     D3D_DEVICE_SET_TEXTURE_ADDRESS = 0x001b1cc0u,
-    D3D_DEVICE_GLOBAL = 0x001c3390u,
-    D3D_STATE_DIRTY_MASK = 0x001c0808u,
-    D3D_TEXTURE_SLOT_OFFSET = 0x00000ba0u,
+    D3D_DEVICE_GLOBAL = DOA3(0x001c3390u, 0x001ede80u),
+    D3D_STATE_DIRTY_MASK = DOA3(0x001c0808u, 0x001ead68u),
+    D3D_TEXTURE_SLOT_OFFSET = DOA3(0x00000ba0u, 0x00000a78u),
     D3D_TEXTURE_DATA_OFFSET = 0x00000004u,
     D3D_TEXTURE_FORMAT_OFFSET = 0x0000000cu,
     D3D_TEXTURE_SIZE_OFFSET = 0x00000010u,
     /* Per-format descriptor table the guest's own D3D8 indexes by format
        byte: bits 2-5 bits-per-pixel, bit 7 render target, bit 6 depth. */
-    D3D_FORMAT_DESCRIPTOR_TABLE = 0x001bef20u,
+    D3D_FORMAT_DESCRIPTOR_TABLE = DOA3(0x001bef20u, 0x001e9ba8u),
     D3D_TEXTURE_REFERENCE_STEP = 0x00080000u,
     /* SetTexture(NULL) at 0x001B1CC0 stores -1 so the next bind reloads its format. */
     D3D_TEXTURE_DISABLE_STATE = 0xffffffffu,
-    D3D_TEXTURE_DIRTY = 0x00000408u,
-    D3D_TEXTURE_FORMAT_DIRTY = 0x400u,
+    D3D_TEXTURE_DIRTY = DOA3(0x00000408u, 0x00004800u),
+    D3D_TEXTURE_FORMAT_DIRTY = DOA3(0x400u, 0x4000u),
+    /* Fence word a released resource records; 4134 dirty bits leave device + 8. */
+    D3D_DEVICE_FENCE = DOA3(0x1cu, 0x30u),
+    D3D_STREAM_TABLE = DOA3(0x001c05c8u, 0x001eb1b8u),
+    D3D_INDEX_DATA = DOA3(0x001c017cu, 0x001ead64u),
+    D3D_DEVICE_BASE_VERTEX = DOA3(0x478u, 0x1cu),
+    D3D_DEVICE_INDEX_BUFFER = DOA3(0x47cu, 0x38cu),
 };
 #endif
 
@@ -146,7 +154,7 @@ static void release_texture_resource(uint32_t texture)
 #else
         /* Temporary seam: resource destruction still uses the verified
            3925 library helper while generated resource creation remains. */
-        0x001b4880u, saved_esp, __FILE__, __LINE__);
+        DOA3(0x001b4880u, 0x001e0750u), saved_esp, __FILE__, __LINE__);
 #endif
 }
 
@@ -196,7 +204,7 @@ static void recomp_d3d_set_texture_adapter(void)
 #ifdef RECOMP_DOAXBV_BINDINGS
     const uint32_t texture_format_offset = 0x0cu;
 #else
-    const uint32_t texture_format_offset = 0x4dcu;
+    const uint32_t texture_format_offset = DOA3(0x4dcu, 0x0cu);
 #endif
 
     if (device == 0u || !recomp_d3d_set_texture(
@@ -226,7 +234,8 @@ static void recomp_d3d_set_texture_adapter(void)
 #ifdef RECOMP_DOAXBV_BINDINGS
         *recomp_memory_u32(previous_texture + 8u) = device + 0x30u;
 #else
-        *recomp_memory_u32(previous_texture + 8u) = *recomp_memory_u32(device + 0x1cu);
+        *recomp_memory_u32(previous_texture + 8u) =
+            *recomp_memory_u32(device + D3D_DEVICE_FENCE);
 #endif
         if ((remaining & 0x0078ffffu) == 0u) {
             release_texture_resource(previous_texture);
@@ -263,11 +272,14 @@ static void recomp_d3d_set_texture_adapter(void)
 static void retain_resource(uint32_t resource)
 {
     if (resource == 0u) return;
+#ifndef RECOMP_DOA3_JP_BINDINGS
+    /* 3925 AddRef (0x001B4960) also retains a surface's parent; 4134 inlines a plain add. */
     uint32_t common = *recomp_memory_u32(resource);
     if ((common & 0x70000u) == 0x50000u && (common & 0x780000u) == 0u) {
         uint32_t parent = *recomp_memory_u32(resource + 0x14u);
         if (parent != 0u) *recomp_memory_u32(parent) += D3D_TEXTURE_REFERENCE_STEP;
     }
+#endif
     *recomp_memory_u32(resource) += D3D_TEXTURE_REFERENCE_STEP;
 }
 
@@ -276,7 +288,7 @@ static void drop_resource(uint32_t resource, uint32_t device, bool fence)
     if (resource == 0u) return;
     uint32_t remaining = *recomp_memory_u32(resource) - D3D_TEXTURE_REFERENCE_STEP;
     *recomp_memory_u32(resource) = remaining;
-    if (fence) *recomp_memory_u32(resource + 8u) = *recomp_memory_u32(device + 0x1cu);
+    if (fence) *recomp_memory_u32(resource + 8u) = *recomp_memory_u32(device + D3D_DEVICE_FENCE);
     if ((remaining & 0x78ffffu) == 0u) release_texture_resource(resource);
 }
 
@@ -287,10 +299,11 @@ static void set_stream_source(void)
     uint32_t stride = stack_argument(esp, 2u);
     uint32_t device = *recomp_memory_u32(D3D_DEVICE_GLOBAL);
     if (!device || stream >= 16u) recomp_stop(2, "d3d-stream:index");
-    uint32_t slot = 0x001c05c8u + stream * 12u;
+    uint32_t slot = D3D_STREAM_TABLE + stream * 12u;
     retain_resource(buffer);
     drop_resource(*recomp_memory_u32(slot + 8u), device, true);
-    *recomp_memory_u32(device + 8u) |= *recomp_memory_u32(slot) == stride ? 0x200u : 0x280u;
+    *recomp_memory_u32(DOA3(device + 8u, D3D_STATE_DIRTY_MASK)) |=
+        *recomp_memory_u32(slot) == stride ? DOA3(0x200u, 0x40u) : DOA3(0x280u, 0x70u);
     *recomp_memory_u32(slot) = stride;
     *recomp_memory_u32(slot + 8u) = buffer;
     recomp_runtime.registers.esp = esp + 16u;
@@ -303,10 +316,10 @@ static void set_indices(void)
     uint32_t device = *recomp_memory_u32(D3D_DEVICE_GLOBAL);
     if (!device) recomp_stop(2, "d3d-indices:device");
     retain_resource(buffer);
-    *recomp_memory_u32(0x001c017cu) = buffer ? *recomp_memory_u32(buffer + 4u) : 0u;
-    drop_resource(*recomp_memory_u32(device + 0x47cu), device, false);
-    *recomp_memory_u32(device + 0x47cu) = buffer;
-    *recomp_memory_u32(device + 0x478u) = base;
+    *recomp_memory_u32(D3D_INDEX_DATA) = buffer ? *recomp_memory_u32(buffer + 4u) : 0u;
+    drop_resource(*recomp_memory_u32(device + D3D_DEVICE_INDEX_BUFFER), device, false);
+    *recomp_memory_u32(device + D3D_DEVICE_INDEX_BUFFER) = buffer;
+    *recomp_memory_u32(device + D3D_DEVICE_BASE_VERTEX) = base;
     recomp_runtime.registers.esp = esp + 12u;
 }
 #endif

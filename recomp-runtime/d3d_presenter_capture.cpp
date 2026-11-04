@@ -265,3 +265,19 @@ uint64_t D3dCapturePacket::bytes() const
     return uint64_t(commands_.size()) * sizeof(RecompD3dPresenterCommand) +
         uint64_t(entries_.size()) * sizeof(Record) + uint64_t(payload_.size()) * sizeof(uint64_t);
 }
+
+D3dCapturePacket::Size D3dCapturePacket::size() const
+{
+    return {entries_.size(), commands_.size(), payload_.size(), span_slots_.size()};
+}
+
+void D3dCapturePacket::reserve(const Size &size)
+{
+    entries_.reserve(size.entries);
+    commands_.reserve(size.commands);
+    payload_.reserve(size.payload_words);
+    if (span_count_ == 0u && span_slots_.size() < size.spans) {
+        span_slots_.assign(size.spans, SpanSlot{nullptr, 0u, 0u});
+        span_count_ = 0u;
+    }
+}

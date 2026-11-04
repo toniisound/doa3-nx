@@ -4,12 +4,16 @@
 #include "d3d_frame_adapter.h"
 #include "d3d_texture_adapter.h"
 #include "d3d_vertex_shader_model.h"
+#include "costume_inject.h"
+#include "doa3_build.h"
+#include "scene_freeze_adapter.h"
 
 #include <inttypes.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 #ifdef RECOMP_DOAXBV_BINDINGS
@@ -42,27 +46,51 @@ enum {
     D3D_TRANSFORM_WORLD = 6u,
 };
 #else
-/* D3D8 3925: docs/doa3-d3d-draw.md. */
+/* D3D8 3925: docs/doa3-d3d-draw.md. Japan 3.1 links 4134, which moves the
+   device fields and keeps 4928's texture stage order; docs/doa3-jp-test.md. */
 enum {
     D3D_DEVICE_DRAW_VERTICES_UP_ADDRESS = 0x001b3760u,
     D3D_DEVICE_DRAW_INDEXED_VERTICES_ADDRESS = 0x001b3940u,
-    D3D_DEVICE_GLOBAL = 0x001c3390u,
-    D3D_CURRENT_RENDER_TARGET_OFFSET = 0x040cu,
+    D3D_DEVICE_GLOBAL = DOA3(0x001c3390u, 0x001ede80u),
+    D3D_CURRENT_RENDER_TARGET_OFFSET = DOA3(0x040cu, 0x2070u),
     D3D_BACK_BUFFER_OFFSET = 0x2150u,
     /* Embedded surface GetBackBuffer(-1) returns. */
     D3D_FRONT_BUFFER_OFFSET = 0x2168u,
-    D3D_STREAM0_STRIDE = 0x001c05c8u,
-    D3D_STREAM0_BUFFER = 0x001c05d0u,
+    D3D_STREAM0_STRIDE = DOA3(0x001c05c8u, 0x001eb1b8u),
+    D3D_STREAM0_BUFFER = DOA3(0x001c05d0u, 0x001eb1c0u),
     D3D_RESOURCE_DATA_OFFSET = 0x04u,
     D3D_RESOURCE_TYPE_MASK = 0x00070000u,
     D3D_RESOURCE_TYPE_VERTEXBUFFER = 0x00000000u,
-    D3D_VERTEX_SHADER_HANDLE_OFFSET = 0x0474u,
-    D3D_VERTEX_BLEND_SHADOW = 0x001c0554u,
-    D3D_TRANSFORM_BASE_OFFSET = 0x0880u,
+    D3D_VERTEX_SHADER_HANDLE_OFFSET = DOA3(0x0474u, 0x0384u),
+    D3D_VERTEX_BLEND_SHADOW = DOA3(0x001c0554u, 0x001eb148u),
+    D3D_TRANSFORM_BASE_OFFSET = DOA3(0x0880u, 0x0750u),
     D3D_TRANSFORM_STRIDE = 0x0040u,
     D3D_TRANSFORM_VIEW = 0u,
     D3D_TRANSFORM_PROJECTION = 1u,
     D3D_TRANSFORM_WORLD = 6u,
+    D3D_TRANSFORM_TEXTURE0 = 2u,
+    /* Stage 0 COLOROP and ADDRESSU; each stage block is 0x80 bytes. */
+    DOA3_TEXTURE_STAGE = DOA3(0x001c0180u, 0x001eada0u),
+    DOA3_TEXTURE_SAMPLER = DOA3(0x001c01a8u, 0x001ead70u),
+    /* Stage 0 TEXTURETRANSFORMFLAGS (3925 state 9, 4134 state 21) and TEXCOORDINDEX. */
+    DOA3_TEXTURE_TRANSFORM_FLAGS = DOA3(0x001c01a4u, 0x001eadc4u),
+    DOA3_TEXCOORD_INDEX = DOA3(0x001c01f0u, 0x001eade0u),
+    /* FogEnable, then table mode, start, end, density and range fog. */
+    DOA3_FOG_ENABLE = DOA3(0x001c04c8u, 0x001eb0b8u),
+    DOA3_FOG_COLOR = DOA3(0x001c0558u, 0x001eb14cu),
+    /* LIGHTING, then SPECULARENABLE and LOCALVIEWER. */
+    DOA3_LIGHTING = DOA3(0x001c04f0u, 0x001eb0e0u),
+    DOA3_AMBIENT = DOA3(0x001c0524u, 0x001eb114u),
+    /* POINTSIZE, then the seven point states after it; see expand_doa3_points. */
+    DOA3_POINT_STATE = DOA3(0x001c0528u, 0x001eb118u),
+    DOA3_TWO_SIDED_LIGHTING = DOA3(0x001c0564u, 0x001eb158u),
+    DOA3_DEVICE_PIXEL_SHADER = DOA3(0x0414u, 0x0370u),
+    DOA3_DEVICE_LIGHTS = DOA3(0x0488u, 0x0398u),
+    /* X, Y, Width, Height, then MinZ and MaxZ at +0x10. */
+    DOA3_DEVICE_VIEWPORT = DOA3(0x0b00u, 0x09d0u),
+    DOA3_DEVICE_MATERIAL = DOA3(0x0b18u, 0x09f0u),
+    DOA3_DEVICE_BASE_VERTEX = DOA3(0x0478u, 0x001cu),
+    DOA3_DEVICE_PALETTE = DOA3(0x0bb0u, 0x0a88u),
 };
 #endif
 
@@ -70,6 +98,21 @@ void sub_001E7750(void);
 void sub_001E78B0(void);
 
 static RecompD3dDrawState draw_state;
+/* The free camera's clean view hides the game's 2D overlay (life bars,
+   timer, names, subtitles): draws already in screen space (XYZRHW). DOA3
+   draws them from the same task as the fighters, so they cannot be left out
+   by task as in the DOAXBV port. They still count as submitted, so the
+   scene freeze's history of drawing tasks does not change. */
+static bool overlay_draw_hidden(uint32_t fvf)
+{
+#ifdef RECOMP_DOAXBV_BINDINGS
+    (void)fvf;
+    return false;
+#else
+    return (fvf & 0x00Eu) == 0x004u && recomp_scene_freeze_overlay_hidden();
+#endif
+}
+
 static uint32_t draw_submitted;
 static uint32_t draw_declined;
 static uint32_t draw_unbound;
@@ -360,9 +403,12 @@ static bool compose_blend_transforms(uint32_t device, RecompD3dPresenterDrawComm
     return true;
 }
 
-static uint32_t largest_index(const uint8_t *indices, uint32_t count)
+/* Returns the largest index and stores the smallest. Draws copy only the
+   vertices between them: most meshes index a slice of a shared buffer. */
+static uint32_t index_range(const uint8_t *indices, uint32_t count, uint32_t *smallest)
 {
     uint32_t largest = 0u;
+    uint32_t least = 0xffffu;
 
     for (uint32_t i = 0u; i < count; ++i) {
         uint16_t value;
@@ -371,7 +417,11 @@ static uint32_t largest_index(const uint8_t *indices, uint32_t count)
         if (value > largest) {
             largest = value;
         }
+        if (value < least) {
+            least = value;
+        }
     }
+    *smallest = least > largest ? largest : least;
     return largest;
 }
 
@@ -439,7 +489,7 @@ static bool attach_palette(uint32_t stage, RecompD3dPresenterDrawCommand *draw)
 #ifdef RECOMP_DOAXBV_BINDINGS
     const uint32_t palette_offset = 0xb48u;
 #else
-    const uint32_t palette_offset = 0xbb0u;
+    const uint32_t palette_offset = DOA3_DEVICE_PALETTE;
 #endif
     if (device == 0u || (uint64_t)device + palette_offset + stage * 4u > UINT32_MAX) return false;
     bytes = guest_span(device + palette_offset + stage * 4u, 4u);
@@ -476,7 +526,7 @@ static void attach_texture(uint32_t stage, RecompD3dPresenterDrawCommand *draw)
 #ifdef RECOMP_DOAXBV_BINDINGS
     bytes = guest_span(0x001f2988u + stage * 0x80u, 8u);
 #else
-    bytes = guest_span(0x001c01a8u + stage * 0x80u, 8u);
+    bytes = guest_span(DOA3_TEXTURE_SAMPLER + stage * 0x80u, 8u);
 #endif
     if (bytes != NULL) {
         memcpy(&draw->address_u, bytes, sizeof draw->address_u);
@@ -518,7 +568,7 @@ static bool read_stage1_arguments(uint32_t arguments[6])
 #ifdef RECOMP_DOAXBV_BINDINGS
         0x001f2a38u,
 #else
-        0x001c0200u,
+        DOA3_TEXTURE_STAGE + 0x80u,
 #endif
         32u);
     const uint32_t offsets[] = {0u, 8u, 12u, 16u, 24u, 28u};
@@ -1358,7 +1408,17 @@ static bool attach_vertex_program(uint32_t handle, uint32_t device,
         SLOTS = 5u, CONSTANTS = 0xc58u, VIEWPORT = 0xa90u, SCALE = 0x518u,
         DEPTH = 0x510u, RANGE = 0xaa0u, PIXEL_SHADER = 0x370u,
         STAGE = 0x001f29b8u, SAMPLER = 0x001f2988u,
-        SCENE_ADDRESS = 3u, TRANSFORM_STATE = 21u };
+        SCENE_ADDRESS = 3u, TRANSFORM_STATE = 21u,
+        OFFSET = 0xaa8u, MULTISAMPLE = 0x001f2de8u };
+#elif defined(RECOMP_DOA3_JP_BINDINGS)
+    /* 4134 CreateVertexShader (0x001DFDF0) and SetViewport (0x001DE930)
+       match the 4928 layout at 4134 device offsets. */
+    enum { PACKED = 0x114u, FLAGS = 0x10u, INSTRUCTIONS = 2u, WORDS = 3u,
+        SLOTS = 5u, CONSTANTS = 0xb98u, VIEWPORT = 0x9d0u, SCALE = 0x454u,
+        DEPTH = 0x44cu, RANGE = 0x9e0u, PIXEL_SHADER = 0x370u,
+        STAGE = DOA3_TEXTURE_STAGE, SAMPLER = DOA3_TEXTURE_SAMPLER,
+        SCENE_ADDRESS = 2u, TRANSFORM_STATE = 21u,
+        OFFSET = 0x9e8u, MULTISAMPLE = 0x001eb184u };
 #else
     /* 3925 CreateVertexShader / LoadVertexShader: see doa3-d3d-draw.md. */
     enum { PACKED = 0x168u, FLAGS = 4u, INSTRUCTIONS = 4u, WORDS = 5u,
@@ -1394,12 +1454,12 @@ static bool attach_vertex_program(uint32_t handle, uint32_t device,
     memcpy(scale, state + SCALE, sizeof scale);
     memcpy(range, state + RANGE, sizeof range);
     memcpy(&depth, state + DEPTH, sizeof depth);
-#ifdef RECOMP_DOAXBV_BINDINGS
-    memcpy(offset, state + 0xaa8u, sizeof offset);
+#if defined(RECOMP_DOAXBV_BINDINGS) || defined(RECOMP_DOA3_JP_BINDINGS)
+    memcpy(offset, state + OFFSET, sizeof offset);
     uint32_t flags;
     memcpy(&flags, state + 8u, sizeof flags);
     uint32_t multisample;
-    const uint8_t *msaa = guest_span(0x001f2de8u, 4u);
+    const uint8_t *msaa = guest_span(MULTISAMPLE, 4u);
     if (!msaa) return false;
     memcpy(&multisample, msaa, 4u);
     if ((flags & 0x8000u) && multisample) { offset[0] -= 0.5f; offset[1] -= 0.5f; }
@@ -1489,6 +1549,7 @@ static void recomp_d3d_draw_indexed_vertices_adapter(void)
     const uint8_t *vertex_bytes;
     uint32_t vertex_span;
     uint32_t vertex_count;
+    uint32_t first_vertex;
     float transform[16];
     const char *decline = NULL;
     const RecompD3dPresenterDrawCommand *capture_command = NULL;
@@ -1546,10 +1607,11 @@ static void recomp_d3d_draw_indexed_vertices_adapter(void)
         decline = "indices";
         goto finished;
     }
-    vertex_count = largest_index(index_bytes, result.plan.index_count) + 1u;
+    vertex_count = index_range(index_bytes, result.plan.index_count, &first_vertex) + 1u - first_vertex;
     vertex_span = recomp_d3d_draw_vertex_bytes(
         result.plan.vertex_stride, vertex_count - 1u);
-    vertex_bytes = guest_span(result.plan.vertex_data, vertex_span);
+    vertex_bytes = guest_span(
+        result.plan.vertex_data + first_vertex * result.plan.vertex_stride, vertex_span);
     if (vertex_bytes == NULL) {
         decline = "vertices";
         goto finished;
@@ -1959,6 +2021,7 @@ static void recomp_d3d_draw_indexed_vertices_adapter(void)
     command.data.draw.index_count = result.plan.index_count;
     command.data.draw.triangle_count = result.plan.triangle_count;
     command.data.draw.vertex_count = vertex_count;
+    command.data.draw.first_vertex = first_vertex;
     command.data.draw.vertex_stride = result.plan.vertex_stride;
     command.data.draw.fvf = result.plan.fvf;
     command.data.draw.vertex_bytes = vertex_bytes;
@@ -1975,6 +2038,7 @@ static void recomp_d3d_draw_indexed_vertices_adapter(void)
         goto finished;
     }
     capture_command = &command.data.draw;
+    if (overlay_draw_hidden(result.plan.fvf)) { ++draw_submitted; goto finished; }
 
     RecompD3dPresenterError presenter_error = recomp_d3d_presenter_submit(
         recomp_d3d_frame_adapter_presenter(), &command);
@@ -2139,6 +2203,7 @@ static void recomp_d3d_draw_vertices_up_adapter(void)
         decline = "up-alpha-mask";
         goto finished;
     }
+    if (overlay_draw_hidden(fvf)) { ++draw_submitted; goto finished; }
     RecompD3dPresenterError presenter_error = recomp_d3d_presenter_submit(
         recomp_d3d_frame_adapter_presenter(), &command);
     recomp_d3d_frame_adapter_exit_if_closed(presenter_error);
@@ -2167,8 +2232,14 @@ finished:
    always holds the last presented frame; the presenter keeps that copy. */
 static void attach_frame_buffer_texture(uint32_t device, RecompD3dPresenterDrawCommand *draw)
 {
+#ifdef RECOMP_DOA3_JP_BINDINGS
+    /* 4134 GetBackBuffer reads a pointer table that Swap rotates. */
+    const uint32_t surfaces[] = {
+        *recomp_memory_u32(device + 0x207cu), *recomp_memory_u32(device + 0x2080u)};
+#else
     const uint32_t surfaces[] = {
         device + D3D_BACK_BUFFER_OFFSET, device + D3D_FRONT_BUFFER_OFFSET};
+#endif
     RecompD3dTextureDesc surface;
 
     if (!draw->has_texture) return;
@@ -2226,30 +2297,30 @@ static void capture_doa3_draw(const RecompD3dPresenterDrawCommand *draw)
         draw->depth.alpha_test_enable, draw->depth.alpha_func, draw->depth.alpha_ref);
     for (uint32_t i = 0u; i < 8u; ++i) {
         if (i) fputc(',', draw_capture.file);
-        capture_word_json(0x001c0180u, i * 4u);
+        capture_word_json(DOA3_TEXTURE_STAGE, i * 4u);
     }
     fputc(']', draw_capture.file);
     uint32_t device = *recomp_memory_u32(D3D_DEVICE_GLOBAL);
     fprintf(draw_capture.file, ",\"color_mask\":%u,\"offscreen\":%u,\"target_data\":%u,\"pixel_shader\":",
         draw->blend.color_write_mask, draw->target.offscreen, draw->target.color.data);
-    capture_word_json(device, 0x414u);
+    capture_word_json(device, DOA3_DEVICE_PIXEL_SHADER);
     fputs(",\"material_alpha\":", draw_capture.file);
-    capture_word_json(device, 0xb24u);
+    capture_word_json(device, DOA3_DEVICE_MATERIAL + 0xcu);
     fputs(",\"lighting\":", draw_capture.file);
-    capture_word_json(0x001c04f0u, 0u);
+    capture_word_json(DOA3_LIGHTING, 0u);
     fprintf(draw_capture.file, ",\"lit\":%u,\"fog\":%u,\"fog_state\":[",
         draw->directional.enabled ? 1u : 0u, draw->fog.mode);
-    capture_word_json(0x001c04c8u, 0u); /* enable */
+    capture_word_json(DOA3_FOG_ENABLE, 0u); /* enable */
     fputc(',', draw_capture.file);
-    capture_word_json(0x001c04ccu, 0u); /* table mode */
+    capture_word_json(DOA3_FOG_ENABLE, 4u); /* table mode */
     fputc(',', draw_capture.file);
-    capture_word_json(0x001c04dcu, 0u); /* range fog */
+    capture_word_json(DOA3_FOG_ENABLE, 0x14u); /* range fog */
     fputc(',', draw_capture.file);
-    capture_word_json(0x001c0558u, 0u); /* fog color */
+    capture_word_json(DOA3_FOG_COLOR, 0u); /* fog color */
     fputs("],\"fog_range\":[", draw_capture.file); /* start, end, density */
     for (uint32_t i = 0u; i < 3u; ++i) {
         float value;
-        const uint32_t word = *recomp_memory_u32(0x001c04d0u + i * 4u);
+        const uint32_t word = *recomp_memory_u32(DOA3_FOG_ENABLE + 8u + i * 4u);
         memcpy(&value, &word, sizeof value);
         if (i) fputc(',', draw_capture.file);
         if (isfinite(value)) fprintf(draw_capture.file, "%.9g", value);
@@ -2264,7 +2335,7 @@ static void capture_doa3_draw(const RecompD3dPresenterDrawCommand *draw)
         capture_word_json(D3D_STREAM0_STRIDE, i * 4u);
     }
     fputs("],\"base_vertex\":", draw_capture.file);
-    capture_word_json(device, 0x478u);
+    capture_word_json(device, DOA3_DEVICE_BASE_VERTEX);
     fputs(",\"callers\":[", draw_capture.file);
     for (uint32_t i = 0u; i < 4u; ++i) {
         uint32_t caller = 0u;
@@ -2297,10 +2368,10 @@ static void attach_doa3_fog(const RecompD3dVertexLayout *layout,
         allowed = !(value && value[0] == '0');
     }
     if (!allowed || draw->program_count || layout->pretransformed ||
-        !*recomp_memory_u32(0x001c04c8u)) return;
-    const uint32_t table = *recomp_memory_u32(0x001c04ccu);
-    const uint32_t words[3] = {*recomp_memory_u32(0x001c04d0u),
-        *recomp_memory_u32(0x001c04d4u), *recomp_memory_u32(0x001c04d8u)};
+        !*recomp_memory_u32(DOA3_FOG_ENABLE)) return;
+    const uint32_t table = *recomp_memory_u32(DOA3_FOG_ENABLE + 4u);
+    const uint32_t words[3] = {*recomp_memory_u32(DOA3_FOG_ENABLE + 8u),
+        *recomp_memory_u32(DOA3_FOG_ENABLE + 0xcu), *recomp_memory_u32(DOA3_FOG_ENABLE + 0x10u)};
     float start, end, density;
     memcpy(&start, &words[0], sizeof start);
     memcpy(&end, &words[1], sizeof end);
@@ -2313,7 +2384,7 @@ static void attach_doa3_fog(const RecompD3dVertexLayout *layout,
     } else {
         return;
     }
-    const uint32_t color = *recomp_memory_u32(0x001c0558u);
+    const uint32_t color = *recomp_memory_u32(DOA3_FOG_COLOR);
     fog.start = start;
     fog.end = end;
     fog.density = density;
@@ -2335,10 +2406,10 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
         layout->normal_offset == RECOMP_D3D_FVF_ABSENT ||
         layout->diffuse_offset != RECOMP_D3D_FVF_ABSENT ||
         layout->specular_offset != RECOMP_D3D_FVF_ABSENT ||
-        !*recomp_memory_u32(0x001c04f0u) || *recomp_memory_u32(0x001c0564u) ||
-        *recomp_memory_u32(0x001c0200u) != 1u) return;
+        !*recomp_memory_u32(DOA3_LIGHTING) || *recomp_memory_u32(DOA3_TWO_SIDED_LIGHTING) ||
+        *recomp_memory_u32(DOA3_TEXTURE_STAGE + 0x80u) != 1u) return;
     /* Stage 0 ops SELECTARG1 (2), SELECTARG2 (3), MODULATE (4) over TEXTURE (2) and DIFFUSE (0). */
-    const uint32_t *stage = recomp_memory_u32(0x001c0180u);
+    const uint32_t *stage = recomp_memory_u32(DOA3_TEXTURE_STAGE);
     RecompD3dDirectionalLighting result = {0};
     for (uint32_t channel = 0u; channel < 2u; ++channel) {
         uint32_t op = stage[channel * 4u], arg1 = stage[channel * 4u + 2u], arg2 = stage[channel * 4u + 3u];
@@ -2348,16 +2419,16 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
         result.stage[channel * 2u] = (first && arg1 == 2u) || (second && arg2 == 2u);
         result.stage[channel * 2u + 1u] = (first && arg1 == 0u) || (second && arg2 == 0u);
     }
-    const float *m = (const float *)(const void *)guest_span(device + 0xb18u, 0x44u);
+    const float *m = (const float *)(const void *)guest_span(device + DOA3_DEVICE_MATERIAL, 0x44u);
     if (!m) return;
     for (uint32_t i = 0u; i < 17u; ++i) if (!isfinite(m[i])) return;
-    const uint32_t ambient = *recomp_memory_u32(0x001c0524u);
+    const uint32_t ambient = *recomp_memory_u32(DOA3_AMBIENT);
     for (uint32_t c = 0u; c < 3u; ++c) {
         result.ambient_emissive[c] = m[12u + c] + m[4u + c] * ((ambient >> (16u - 8u * c)) & 255u) / 255.0f;
         result.material_diffuse[c] = m[c];
     }
     result.material_diffuse[3] = m[3];
-    for (uint32_t light = *recomp_memory_u32(device + 0x488u); light; ++result.count) {
+    for (uint32_t light = *recomp_memory_u32(device + DOA3_DEVICE_LIGHTS); light; ++result.count) {
         const float *l = (const float *)(const void *)guest_span(light, 0x90u);
         if (!l || result.count == 8u) return;
         const uint32_t type = ((const uint32_t *)l)[0], i = result.count;
@@ -2378,13 +2449,19 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
         light = ((const uint32_t *)l)[0x23];
     }
     for (uint32_t i = 0u; i <= layout->blend_weight_count; ++i) {
-        if (!read_transform(device, D3D_TRANSFORM_WORLD + i, result.world_transforms[i]) ||
-            !recomp_d3d_normal_transform(result.world_transforms[i], result.normal_transforms[i])) return;
+        if (!read_transform(device, D3D_TRANSFORM_WORLD + i, result.world_transforms[i])) return;
+        /* Forest dust and similar flat billboards use a singular world matrix.
+           shortcut: keep zero normals so material alpha still applies; diffuse
+           light is lost, revisit if a lit surface ever uses one. */
+#if !defined(__SWITCH__)
+        /* The Switch renderer derives these on its own thread. */
+        recomp_d3d_normal_transform(result.world_transforms[i], result.normal_transforms[i]);
+#endif
     }
     /* LOCALVIEWER is off in DOA3: the viewer direction is eye-space -Z in world space. */
     float view[16];
-    if (*recomp_memory_u32(0x001c04f4u)) {
-        if (*recomp_memory_u32(0x001c04f8u) || !read_transform(device, D3D_TRANSFORM_VIEW, view)) return;
+    if (*recomp_memory_u32(DOA3_LIGHTING + 4u)) {
+        if (*recomp_memory_u32(DOA3_LIGHTING + 8u) || !read_transform(device, D3D_TRANSFORM_VIEW, view)) return;
         float length = sqrtf(view[2] * view[2] + view[6] * view[6] + view[10] * view[10]);
         if (!(length > 0.0f)) return;
         for (uint32_t c = 0u; c < 3u; ++c) result.view[c] = -view[2u + 4u * c] / length;
@@ -2394,6 +2471,100 @@ static void attach_doa3_lighting(uint32_t device, const RecompD3dVertexLayout *l
     result.stage_mode = true;
     result.enabled = true;
     draw->directional = result;
+}
+
+/* Chrome materials (FUN_00156300 layer mode 0x1000000, e.g. Zack's third
+   costume) set stage 0 TEXCOORDINDEX to CAMERASPACEREFLECTIONVECTOR with
+   COUNT2 and a sphere-map TEXTURE0 transform. 3925 programs NV2A
+   REFLECTION_MAP texgen for it (0x001B2930): reflect the normalized eye-space
+   position off the eye-space normal. COUNT2 reads only the first two columns;
+   the game leaves stale words in the others.
+   shortcut: stage 0 on unskinned meshes with normals and UV0, the only case
+   captured; a reflection layer on stage 1 still draws without it. */
+static void attach_doa3_reflection_texgen(uint32_t device, const RecompD3dVertexLayout *layout,
+    RecompD3dPresenterDrawCommand *draw)
+{
+    float world[16], view[16], texture[16];
+    if (!draw->has_texture || draw->program_count || layout->pretransformed ||
+        layout->blend_weight_count || layout->normal_offset == RECOMP_D3D_FVF_ABSENT ||
+        layout->texcoord_offset == RECOMP_D3D_FVF_ABSENT ||
+        (*recomp_memory_u32(DOA3_TEXCOORD_INDEX) & 0xffff0000u) != 0x30000u ||
+        *recomp_memory_u32(DOA3_TEXTURE_TRANSFORM_FLAGS) != 2u ||
+        !read_transform(device, D3D_TRANSFORM_WORLD, world) ||
+        !read_transform(device, D3D_TRANSFORM_VIEW, view) ||
+        !read_transform(device, D3D_TRANSFORM_TEXTURE0, texture)) return;
+    for (uint32_t row = 0u; row < 4u; ++row) {
+        if (!isfinite(texture[row * 4u]) || !isfinite(texture[row * 4u + 1u])) return;
+        texture[row * 4u + 2u] = texture[row * 4u + 3u] = 0.0f;
+    }
+    multiply_transform(world, view, draw->reflection_world_view);
+    if (!recomp_d3d_normal_transform(draw->reflection_world_view, draw->reflection_normal)) return;
+    memcpy(draw->reflection_transform, texture, sizeof texture);
+    draw->reflection_normalize = recomp_d3d_render_state_adapter_model()->normalize_normals != 0u;
+    draw->reflection_texgen = true;
+}
+
+/* D3D8 point lists, such as SNOW's falling snow, as quads
+   (recomp_d3d_point_quads). 3925 D3D_LazySetPointParams (0x001B6120) reads
+   POINTSIZE, POINTSIZE_MIN, POINTSPRITEENABLE, POINTSCALEENABLE,
+   POINTSCALE_A to _C and POINTSIZE_MAX from the eight states after AMBIENT;
+   4134 keeps them there. Lit points without vertex color take the material's
+   diffuse alpha. Returns the storage the draw now points into, for the caller
+   to free.
+   shortcut: the stage's combiner is drawn as texture (times diffuse when the
+   FVF has one) and lit RGB is not evaluated; every traced point list selects
+   texture color, so model more ops when a list that does not is traced. */
+static uint8_t *expand_doa3_points(uint32_t device, uint32_t stage, uint32_t stride,
+    RecompD3dVertexLayout *layout, RecompD3dPresenterDrawCommand *draw)
+{
+    float world[16], view[16], world_view[16];
+    uint32_t words[8];
+    RecompD3dPointState state = {0};
+    const uint8_t *bytes = guest_span(DOA3_POINT_STATE, sizeof words);
+    if (!bytes || !draw->has_transform || !(draw->viewport[2] > 0.0f) || !(draw->viewport[3] > 0.0f) ||
+        !read_transform(device, D3D_TRANSFORM_WORLD, world) ||
+        !read_transform(device, D3D_TRANSFORM_VIEW, view) ||
+        !read_transform(device, D3D_TRANSFORM_PROJECTION, draw->transform)) return NULL;
+    memcpy(words, bytes, sizeof words);
+    memcpy(&state.size, &words[0], sizeof state.size);
+    memcpy(&state.size_min, &words[1], sizeof state.size_min);
+    memcpy(state.scale, &words[4], sizeof state.scale);
+    memcpy(&state.size_max, &words[7], sizeof state.size_max);
+    state.scale_enable = words[3] != 0u;
+    state.sprite = stage != 0u;
+    multiply_transform(world, view, world_view);
+    const uint32_t count = draw->index_count, widest = recomp_d3d_fvf_stride(0x142u);
+    uint8_t *storage = malloc((size_t)count * (4u * widest + 6u * sizeof(uint16_t)));
+    if (!storage) return NULL;
+    uint16_t *indices = (uint16_t *)(void *)(storage + (size_t)count * 4u * widest);
+    const uint32_t fvf = recomp_d3d_point_quads(&state, draw->vertex_bytes, stride, layout,
+        draw->index_bytes, count, draw->first_vertex, world_view, draw->transform,
+        draw->viewport[2], draw->viewport[3], storage, indices);
+    if (!fvf || !recomp_d3d_fvf_layout(fvf, layout)) {
+        free(storage);
+        return NULL;
+    }
+    draw->primitive_type = RECOMP_D3D_PT_TRIANGLELIST;
+    draw->fvf = fvf;
+    draw->vertex_stride = layout->stride;
+    draw->vertex_bytes = storage;
+    draw->index_bytes = indices;
+    draw->first_vertex = 0u;
+    draw->vertex_count = 4u * count;
+    draw->index_count = 6u * count;
+    draw->triangle_count = 2u * count;
+    draw->cull_mode = RECOMP_D3D_CULL_NONE;
+    const uint32_t stage_state = DOA3_TEXTURE_STAGE + stage * 0x80u;
+    const float *material = (const float *)(const void *)guest_span(device + DOA3_DEVICE_MATERIAL, 16u);
+    if (*recomp_memory_u32(DOA3_LIGHTING) && layout->diffuse_offset == RECOMP_D3D_FVF_ABSENT &&
+        material && isfinite(material[3])) {
+        draw->material_alpha_mode = recomp_d3d_texture_material_alpha_mode(
+            *recomp_memory_u32(stage_state), *recomp_memory_u32(stage_state + 8u),
+            *recomp_memory_u32(stage_state + 0xcu), *recomp_memory_u32(stage_state + 0x10u),
+            *recomp_memory_u32(stage_state + 0x18u), *recomp_memory_u32(stage_state + 0x1cu));
+        draw->material_alpha = material[3];
+    }
+    return storage;
 }
 
 #if defined(__SWITCH__)
@@ -2410,6 +2581,29 @@ void doa3_nx_counter_add(int counter, uint64_t value);
 
 /* All three 3925 draw APIs use the same vertex, texture and presenter models.
    ponytail: one stream; admit additional layouts when observed and verified. */
+/* DOATEC HK's street lights (0x00108300, 0x0010EF50) fade each sprite by a
+   fresh rand() roll of 0.11-0.15 every frame. That flicker is the original's,
+   held at its 0.13 midpoint on request. Their draw call 0x001579E0 keeps
+   EBP = ESP - 0x74, so its return address sits at EBP + 0x78. */
+static bool doa3_street_light_draw(void)
+{
+    static const uint32_t returns[] = {
+        DOA3(0x001083b0u, 0x00120fc0u), DOA3(0x001083d7u, 0x00120fe7u),
+        DOA3(0x001083fdu, 0x0012100eu), DOA3(0x00108424u, 0x00121034u),
+        DOA3(0x0010f000u, 0x00122440u), DOA3(0x0010f027u, 0x00122467u),
+        DOA3(0x0010f04du, 0x0012248eu), DOA3(0x0010f074u, 0x001224b4u),
+    };
+    const uint8_t *slot = guest_span(recomp_runtime.registers.ebp + 0x78u, 4u);
+    uint32_t caller;
+
+    if (slot == NULL) return false;
+    memcpy(&caller, slot, sizeof caller);
+    for (size_t i = 0u; i < sizeof returns / sizeof returns[0]; ++i) {
+        if (caller == returns[i]) return true;
+    }
+    return false;
+}
+
 static void submit_doa3_draw(uint32_t primitive, uint32_t count,
     uint32_t vertices, uint32_t stride, const uint16_t *indices)
 {
@@ -2417,10 +2611,30 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
     uint32_t fvf = device ? *recomp_memory_u32(device + D3D_VERTEX_SHADER_HANDLE_OFFSET) : 0u;
     uint32_t triangles = recomp_d3d_draw_triangle_count(primitive, count);
     RecompD3dVertexLayout layout;
+#if defined(__SWITCH__)
+    /* Fixed-function draws never read the 5 KiB vertex-program arrays (the
+       capture skips them too), so only the rest of the 7.5 KiB command is
+       cleared; vertex-program draws clear it all. */
+    RecompD3dPresenterCommand command;
+    if ((fvf & 1u) != 0u) {
+        memset(&command, 0, sizeof command);
+    } else {
+        const size_t head = offsetof(RecompD3dPresenterCommand, data.draw.program);
+        const size_t tail = offsetof(RecompD3dPresenterCommand, data.draw.program_alpha_mask);
+        memset(&command, 0, head);
+        memset((char *)&command + tail, 0, sizeof command - tail);
+    }
+#else
     RecompD3dPresenterCommand command = {0};
+#endif
     RecompD3dPresenterDrawCommand *draw = &command.data.draw;
     uint16_t *sequential = NULL;
     const char *decline = NULL;
+    uint8_t *point_storage = NULL;
+    /* With sprites on, 3925 builds the only combiner stage from stage 3
+       (0x001B6410), where NV2A generates the sprite coordinates. */
+    const uint32_t stage = primitive == RECOMP_D3D_PT_POINTLIST &&
+        *recomp_memory_u32(DOA3_POINT_STATE + 8u) ? 3u : 0u;
     DRAW_STAGE_BEGIN();
     if ((fvf & 1u) != 0u) {
         if (!attach_vertex_program(fvf, device, draw)) {
@@ -2429,7 +2643,8 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
         }
         fvf = 0x112u;
     }
-    if (!device || (!triangles && (primitive != 2u || count < 2u || count % 2u)) ||
+    if (!device || (!triangles && primitive != RECOMP_D3D_PT_POINTLIST &&
+            (primitive != 2u || count < 2u || count % 2u)) ||
         !count || count > 65536u ||
         !recomp_d3d_fvf_layout(fvf, &layout) || stride < layout.stride ||
         (fvf >> 16u) != 0u) {
@@ -2466,12 +2681,13 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
         }
         doa3_nx_counter_add(1, (uint64_t)(highest + 1u) * stride);
         draw->vertex_count = highest + 1u;
+        draw->first_vertex = 0u; /* indices are rebased to the window */
     }
 #else
-    draw->vertex_count = largest_index((const uint8_t *)indices, count) + 1u;
+    draw->vertex_count = index_range((const uint8_t *)indices, count, &draw->first_vertex) + 1u - draw->first_vertex;
 #endif
     uint32_t bytes = recomp_d3d_draw_vertex_bytes(stride, draw->vertex_count - 1u);
-    draw->vertex_bytes = vertices ? guest_span(vertices, bytes) : NULL;
+    draw->vertex_bytes = vertices ? guest_span(vertices + draw->first_vertex * stride, bytes) : NULL;
     if (!draw->vertex_bytes) { decline = "doa3-vertices"; goto finished; }
     command.type = RECOMP_D3D_PRESENTER_COMMAND_DRAW;
     draw->primitive_type = primitive;
@@ -2491,8 +2707,8 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
         /* 3925 SetViewport (0x001B199D): X, Y, Width, Height at +0xB00, MinZ/MaxZ at +0xB10. */
         uint32_t rect[4];
         float range[2];
-        memcpy(rect, recomp_memory_u32(device + 0xb00u), sizeof rect);
-        memcpy(range, recomp_memory_u32(device + 0xb10u), sizeof range);
+        memcpy(rect, recomp_memory_u32(device + DOA3_DEVICE_VIEWPORT), sizeof rect);
+        memcpy(range, recomp_memory_u32(device + DOA3_DEVICE_VIEWPORT + 0x10u), sizeof range);
         if (rect[2] && rect[3] && rect[2] <= 8192u && rect[3] <= 8192u &&
             range[0] >= 0.0f && range[1] <= 1.0f && range[0] <= range[1]) {
             const float viewport[6] = {(float)rect[0], (float)rect[1], (float)rect[2],
@@ -2507,30 +2723,57 @@ static void submit_doa3_draw(uint32_t primitive, uint32_t count,
     draw->cull_mode = state->cull_mode == 0x900u ? RECOMP_D3D_CULL_CLOCKWISE :
         state->cull_mode == 0x901u ? RECOMP_D3D_CULL_COUNTER_CLOCKWISE : RECOMP_D3D_CULL_NONE;
     draw->texture_factor = state->texture_factor;
+    const uint32_t stage_state = DOA3_TEXTURE_STAGE + stage * 0x80u;
     draw->use_texture_factor = recomp_d3d_texture_factor_selected(
-        *recomp_memory_u32(0x001c0180u), *recomp_memory_u32(0x001c0188u),
-        *recomp_memory_u32(0x001c0190u), *recomp_memory_u32(0x001c0198u));
+        *recomp_memory_u32(stage_state), *recomp_memory_u32(stage_state + 8u),
+        *recomp_memory_u32(stage_state + 0x10u), *recomp_memory_u32(stage_state + 0x18u));
+    /* Stage 1 TFACTOR * CURRENT fades meshes such as DOATEC's wet-road light streaks. */
+    uint32_t stage1_arguments[6];
+    draw->modulate_texture_factor = !stage && !draw->use_texture_factor &&
+        read_stage1_arguments(stage1_arguments) &&
+        recomp_d3d_texture_factor_modulate_selected(
+            stage1_arguments, *recomp_memory_u32(DOA3_TEXTURE_STAGE + 0x100u));
+    if (draw->modulate_texture_factor && doa3_street_light_draw()) {
+        draw->texture_factor = (draw->texture_factor & 0x00ffffffu) | 0x21000000u;
+    }
     if (!recomp_d3d_frame_adapter_target(&draw->target)) {
         decline = "doa3-target";
         goto finished;
     }
     DRAW_STAGE(2);
-    attach_texture(0u, draw);
+    if (primitive == RECOMP_D3D_PT_POINTLIST) {
+        point_storage = expand_doa3_points(device, stage, stride, &layout, draw);
+        if (!point_storage) { decline = "doa3-points"; goto finished; }
+    }
+    attach_texture(stage, draw);
     attach_frame_buffer_texture(device, draw);
     DRAW_STAGE(3);
     attach_doa3_lighting(device, &layout, draw);
     DRAW_STAGE(4);
+    attach_doa3_reflection_texgen(device, &layout, draw);
     attach_doa3_fog(&layout, draw);
     /* XYZRHW without a diffuse field supplies white, including alpha. */
     if (layout.pretransformed && layout.diffuse_offset == RECOMP_D3D_FVF_ABSENT &&
         recomp_d3d_texture_material_alpha_mode(
-            *recomp_memory_u32(0x001c0180u), *recomp_memory_u32(0x001c0188u),
-            *recomp_memory_u32(0x001c018cu), *recomp_memory_u32(0x001c0190u),
-            *recomp_memory_u32(0x001c0198u), *recomp_memory_u32(0x001c019cu)) ==
+            *recomp_memory_u32(DOA3_TEXTURE_STAGE), *recomp_memory_u32(DOA3_TEXTURE_STAGE + 8u),
+            *recomp_memory_u32(DOA3_TEXTURE_STAGE + 0xcu), *recomp_memory_u32(DOA3_TEXTURE_STAGE + 0x10u),
+            *recomp_memory_u32(DOA3_TEXTURE_STAGE + 0x18u), *recomp_memory_u32(DOA3_TEXTURE_STAGE + 0x1cu)) ==
             RECOMP_D3D_MATERIAL_ALPHA_SELECT_DIFFUSE) {
         draw->material_alpha_mode = RECOMP_D3D_MATERIAL_ALPHA_SELECT_DIFFUSE;
         draw->material_alpha = 1.0f;
     }
+    /* DOAXBV swimsuits: a fighter's body draws are replaced by her suit. */
+    if (draw->has_transform && recomp_costume_inject_enabled()) {
+        float world[16], view[16], projection[16];
+        if (read_transform(device, D3D_TRANSFORM_WORLD, world) &&
+            read_transform(device, D3D_TRANSFORM_VIEW, view) &&
+            read_transform(device, D3D_TRANSFORM_PROJECTION, projection) &&
+            recomp_costume_inject_draw(recomp_d3d_frame_adapter_swap_counter() + 1u,
+                vertices, world, view, projection, draw,
+                (const float *)(const void *)guest_span(device + DOA3_DEVICE_MATERIAL, 68u)))
+            goto finished;
+    }
+    if (overlay_draw_hidden(fvf)) { ++draw_submitted; goto finished; }
     DRAW_STAGE(5);
     if (recomp_d3d_presenter_submit(recomp_d3d_frame_adapter_presenter(), &command) !=
         RECOMP_D3D_PRESENTER_OK) { decline = "doa3-presenter"; goto finished; }
@@ -2546,6 +2789,7 @@ finished:
         report_decline(decline);
     }
     free(sequential);
+    free(point_storage);
     DRAW_STAGE(7);
 }
 
@@ -2567,7 +2811,7 @@ static void doa3_draw_indexed_vertices(void)
     uint32_t data = stack_argument(esp, 2u);
     uint32_t stride = *recomp_memory_u32(D3D_STREAM0_STRIDE);
     uint32_t device = *recomp_memory_u32(D3D_DEVICE_GLOBAL);
-    uint32_t base = device ? *recomp_memory_u32(device + 0x478u) : 0u;
+    uint32_t base = device ? *recomp_memory_u32(device + DOA3_DEVICE_BASE_VERTEX) : 0u;
     const uint8_t *indices = count <= 65536u ? guest_span(data, count * 2u) : NULL;
     if (indices) submit_doa3_draw(stack_argument(esp, 0u), count,
         stream_vertices(base, stride), stride, (const uint16_t *)indices);

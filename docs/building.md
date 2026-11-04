@@ -15,6 +15,15 @@ The macOS and Linux host layer comes from the sister project
 [doaxbv-re](https://github.com/NoRain211/doaxbv-re), whose macOS and Linux
 ports are shared code.
 
+## Get the source
+
+Download `DOA3-<version>-macOS.tar.gz` or `DOA3-<version>-Linux.tar.gz` from the latest
+[release](https://github.com/NoRain211/doa3-re/releases/latest) and extract it
+(for example `tar xzf DOA3-<version>-Linux.tar.gz`), then run the steps below from
+the extracted folder. It holds the source, the pinned lifter and the scripts,
+with no game files or prebuilt game. Instead of the archive you can clone the
+repository with `git clone --recurse-submodules`.
+
 ## macOS
 
 Install CMake, Ninja, SDL3 and Python 3.12 or newer:
@@ -33,7 +42,8 @@ cmake -S extract-xiso -B extract-xiso/build && cmake --build extract-xiso/build
 ```
 
 The lifter needs Capstone 5.0.7. Homebrew's Python refuses a global
-`pip install`, so put it in the virtual environment the scripts look for:
+`pip install`, so put it in the virtual environment the scripts look for
+(from a clone, as here, or from the extracted archive):
 
 ```bash
 git clone --recurse-submodules https://github.com/NoRain211/doa3-re.git
@@ -98,6 +108,11 @@ that shortcut.
   error, but not bit-identical. x86-64 hosts use the native instructions.
 
 ## Runtime tests
+
+On every platform, configuration downloads Dear ImGui 1.91.9, which draws
+the swimsuit switch's and the free camera's panels, and checks its SHA-256;
+set `FETCHCONTENT_SOURCE_DIR_IMGUI` to an unpacked copy to configure
+offline.
 
 ```bash
 cmake -S recomp-runtime -B build/recomp-runtime -G Ninja
