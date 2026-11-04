@@ -106,7 +106,7 @@ void draw(Canvas &canvas, int selected, bool widescreen, bool show_fps)
     canvas.centeredIn(aspectLeft + aspectW + 20, aspectW, aspectY + 8, "16:9", 2,
         widescreen ? kText : kDim);
 
-    canvas.centered(212, show_fps ? "FPS: ON" : "FPS: OFF", 2, show_fps ? kText : kDim);
+    canvas.centered(kHeight - 126, show_fps ? "FPS: ON   (X: toggle)" : "FPS: OFF   (X: toggle)", 2, show_fps ? kText : kDim);
 
     constexpr int kBoxW = 520, kBoxH = 100, kTop = 250, kGap = 8;
     for (int i = 0; i < kCount; ++i) {
@@ -115,7 +115,7 @@ void draw(Canvas &canvas, int selected, bool widescreen, bool show_fps)
         canvas.centered(y + 8, kChoices[i].label, 4, kText);
         canvas.centered(y + 74, kChoices[i].note, 2, i == selected ? kText : kDim);
     }
-    canvas.centered(kHeight - 76, "Up/Down: resolution  Left/Right: aspect  Y: FPS  A: confirm", 1, kDim);
+    canvas.centered(kHeight - 76, "Up/Down: resolution  Left/Right: aspect  X: toggle FPS  A: confirm", 1, kDim);
 }
 
 } // namespace
@@ -164,7 +164,7 @@ extern "C" int doa3_nx_boot_menu(int initial_height, int initial_widescreen,
         if (down & (HidNpadButton_Right | HidNpadButton_StickLRight)) {
             if (!widescreen) { widescreen = true; redraw = true; }
         }
-        if (down & HidNpadButton_Y) {
+        if (down & HidNpadButton_X) {
             show_fps = !show_fps;
             if (selected_show_fps != nullptr) *selected_show_fps = show_fps ? 1 : 0;
             redraw = true;
