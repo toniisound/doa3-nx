@@ -1,14 +1,69 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 — 2026-11-02
+
+Faster builds.
 
 ### Changed
 
+- **Faster builds** (#40). The build lifts from each disc's stored function
+  list instead of disassembling `default.xbe` again, which saves 3 to 5
+  minutes per build. The generated program is unchanged for both Japan 3.1
+  and USA 3.0.
+
+## 0.6 — 2026-11-02
+
+Native 16:10 and ultrawide screens, and fullscreen that covers any screen.
+
+### Added
+
+- **16:10 and ultrawide screens** (#45). The launcher's Screen setting adds
+  16:10 and Ultrawide (the primary monitor's own shape, such as 21:9 or 32:9,
+  up to 4:1; 21:9 on a narrower monitor), which the game renders natively:
+  its projection and fight camera take the shape, the HUD and menus keep
+  their 4:3 shape, and movies keep the film's shape. Wider than 16:9, the
+  fight camera keeps its 16:9 framing and the view widens around it.
+
+### Fixed
+
+- **Fullscreen on other screen shapes** (#45). On Windows above 480p, the
+  game window covers the whole screen instead of leaving the desktop showing
+  below or beside it. A screen of another shape than the chosen one gets
+  black bars.
+- **Japan 3.1 movies in widescreen** keep the film's shape instead of
+  stretching.
+
+## 0.5 — 2026-11-01
+
+Windows builds without Visual Studio, and one beach launcher on every
+platform.
+
+### Changed
+
+- **Windows builds without Visual Studio.** The build downloads the pinned
+  [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20261006 (Clang 23,
+  the same compiler as the DOAXBV and DOA2U ports) and CMake 4.4.5 (245 MB,
+  each checked against its SHA-256) into `private/` on its first run instead
+  of installing the Visual Studio 2022 Build Tools, so Python is the only
+  thing to install. The first 0.5 upload used w64devkit's GCC instead.
+  The runner moves to `build/recomp-program/recomp_program_runner.exe`;
+  rebuild once after updating. Visual Studio 2022 remains an optional way to
+  build the runtime and its tests.
 - **Beach launcher.** The Windows, Linux and macOS launchers share one look:
   a sunset beach between letterbox bars, with page tabs and the chosen page's
   settings side by side in the bottom bar. Left and right move between pages
   and settings. Down opens a page; inside it, up and down change a value. The
   Linux and macOS launchers move to pages too.
+
+### Fixed
+
+- **Save checks on Windows.** Save recovery no longer checks the bare drive
+  name (`C:`, the drive's current folder) and reads file types from Windows
+  attributes, so files dated before 1970 no longer stop recovery when the
+  runtime is built with MinGW.
+- **First build stopping with "Access is denied".** When antivirus is still
+  scanning the new disc links or the extracted disc, the build waits up to 30
+  seconds for the folder to unlock instead of failing on `play-disc.tmp`.
 
 ## 0.4 — 2026-10-27
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Build the DOA3 runner from a user-owned ISO or extracted disc folder."""
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -8,15 +9,26 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
+import time
 import urllib.request
 import uuid
+import zipfile
 
 from extract_iso import extract, run_logged, sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 LIFTER = ROOT / "tools" / "xboxrecomp"
 CAPSTONE = "5.0.7"
+# Windows builds with llvm-mingw's Clang and mingw32-make, pinned the same as
+# doaxbv-re and doa2u-re, and Kitware's CMake; each is fetched on first use.
+WINDOWS_TOOLS = [
+    ("llvm-mingw-20261006", "clang.exe",
+     "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-x86_64.zip",
+     "317492c456aa27ee607a5919f1d2d38dcdc1112516a24d0bf4b00d078f52d17a"),
+    ("cmake-4.4.5", "cmake.exe",
+     "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+     "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004"),
+]
 # The discs the build accepts, by default.xbe SHA-256: Japan 3.1 is the main
 # build, USA 3.0 is still accepted. "program" is the generated program the
 # runtime was validated against; changing the lifter pin, the recipe's JSON or
@@ -44,6 +56,17 @@ def use_windows_newlines(generated):
         if path.is_file():
             data = path.read_bytes()
             path.write_bytes(data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+
+
+def rename_retrying(source, target):
+    """Antivirus scans of freshly written files can briefly lock a folder against renaming."""
+    for attempt in range(31):  # 30 one-second waits
+        try:
+            return source.rename(target)
+        except PermissionError:
+            if attempt == 30:
+                raise
+            time.sleep(1)
 
 
 def program_manifest(generated):
@@ -116,7 +139,7 @@ def find_disc(source, movies=True, extractor=None):
             raise ValueError(f"{imported} holds game saves; move them out before using another ISO")
         print(f"Replacing {imported}", flush=True)
         shutil.rmtree(imported)
-    staging.rename(imported)
+    rename_retrying(staging, imported)
     return imported / "disc"
 
 
@@ -149,7 +172,7 @@ def prepare_play_disc(disc, movies, name="play-disc"):
                 shutil.copyfile(file, partial)
         os.replace(partial, target)
     if folder != play:
-        folder.rename(play)
+        rename_retrying(folder, play)
 
 
 def cut_owned_movies(disc):
@@ -177,32 +200,31 @@ def ask_movies(source):
     return not answer.strip().casefold().startswith("n")
 
 
-def has_msvc():
-    # Without it CMake falls back to NMake and fails with a confusing "-A x64" error.
-    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                   "Microsoft Visual Studio", "Installer", "vswhere.exe")
-    if not vswhere.exists():
-        return False
-    found = subprocess.run([vswhere, "-latest", "-products", "*", "-requires",
-                            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                            "-property", "installationPath"], capture_output=True, text=True)
-    return bool(found.stdout.strip())
-
-
-def install_msvc():
-    # VS 2022 Build Tools rather than 2026: every CMake from 3.20 knows its generator.
-    print("Installing the Visual Studio 2022 C++ Build Tools (several GB); accept the "
-          "Windows prompt and wait for the installer to finish.", flush=True)
-    with tempfile.TemporaryDirectory() as folder:
-        bootstrapper = Path(folder, "vs_BuildTools.exe")
-        urllib.request.urlretrieve("https://aka.ms/vs/17/release/vs_BuildTools.exe", bootstrapper)
-        code = subprocess.run([bootstrapper, "--passive", "--wait", "--norestart",
-                               "--add", "Microsoft.VisualStudio.Workload.VCTools",
-                               "--includeRecommended"]).returncode
-    # 3010: installed, a restart is recommended but the build works without one.
-    if code not in (0, 3010) or not has_msvc():
-        raise ValueError('Install Visual Studio 2022 or newer, or its Build Tools, with the '
-                         f'"Desktop development with C++" workload (installer exit code {code})')
+def windows_tools():
+    """The pinned Windows tools' bin folders, each downloaded into private/ on first use."""
+    bins = []
+    for name, probe, url, expected in WINDOWS_TOOLS:
+        home = ROOT / "private" / name
+        bins.append(home / "bin")
+        if (home / "bin" / probe).exists():
+            continue
+        print(f"Downloading {name} (first build only).", flush=True)
+        # Unpacked beside its final name and renamed last, so a broken download never looks complete.
+        staging = home.with_name(home.name + ".tmp")
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        archive = staging / "download.zip"
+        urllib.request.urlretrieve(url, archive)
+        if sha256(archive) != expected:
+            shutil.rmtree(staging)
+            raise ValueError(f"The downloaded {url.rsplit('/', 1)[1]} does not match its pinned SHA-256")
+        with zipfile.ZipFile(archive) as contents:
+            contents.extractall(staging / "unpacked")
+        (top,) = (staging / "unpacked").iterdir()  # each ZIP holds one versioned folder
+        shutil.rmtree(home, ignore_errors=True)
+        rename_retrying(top, home)
+        shutil.rmtree(staging)
+    return bins
 
 
 def build(source, movies=True, extractor=None):
@@ -213,11 +235,12 @@ def build(source, movies=True, extractor=None):
     print(f"Dead or Alive 3 {version['name']}", flush=True)
     print(f"Linking the disc into private/{play}" + ("" if movies else " without movies"), flush=True)
     prepare_play_disc(disc, movies, play)
-    if shutil.which("cmake") is None:
+    if windows:
+        os.environ["PATH"] = os.pathsep.join(map(str, windows_tools() + [os.environ["PATH"]]))
+        shutil.rmtree(ROOT / "private" / "w64devkit-2.11.0", ignore_errors=True)  # 0.5's toolchain, 720 MB
+    elif shutil.which("cmake") is None:
         raise ValueError("Install CMake 3.20 or newer and add it to PATH")
-    if windows and not has_msvc():
-        install_msvc()
-    if not windows and shutil.which("ninja") is None:
+    elif shutil.which("ninja") is None:
         raise ValueError("Install Ninja and add it to PATH")
     try:
         import capstone
@@ -229,20 +252,16 @@ def build(source, movies=True, extractor=None):
 
     work = ROOT / "private" / ("program-" + uuid.uuid4().hex[:8])
     work.mkdir(parents=True)
-    disasm, generated = work / "disasm", work / "generated"
+    generated = work / "generated"
     recipe = ROOT / "tools" / version["recipe"]
-    print(f"Lifting {xbe.name} takes several minutes.", flush=True)
-    analysis = work / "default_analysis.json"
-    run_logged([sys.executable, "-u", "-m", "tools.xbe_parser", xbe, "--json", analysis],
-               work / "xbe_parser.log", LIFTER)
-    run_logged([sys.executable, "-u", "-m", "tools.disasm", xbe, "-o", disasm,
-                "--analysis-json", analysis,
-                "--seed-functions", recipe / "seed_functions.json"],
-               work / "disasm.log", LIFTER)
-    # The missing func-id/ABI/icall paths keep the lifter to the recipe's inputs.
+    # The recipe's stored disassembly result spares every build about three minutes.
+    functions = work / "functions.json"
+    functions.write_bytes(gzip.decompress((recipe / "functions.json.gz").read_bytes()))
+    print(f"Lifting {xbe.name} takes a few minutes.", flush=True)
+    # The missing disasm/func-id/ABI/icall paths keep the lifter to the recipe's inputs.
     run_logged([sys.executable, "-u", "-m", "tools.recomp", xbe, "--all", "--split", "1000",
                 "--game-name", "Dead or Alive 3",
-                "--functions", disasm / "functions.json", "--labels", disasm / "labels.json",
+                "--functions", functions, "--disasm-dir", work / "none",
                 "--func-id-dir", work / "none", "--abi-dir", work / "none",
                 "--icall-sites", work / "none.json",
                 "--manual-functions", recipe / "manual_functions.json",
@@ -255,7 +274,14 @@ def build(source, movies=True, extractor=None):
         raise ValueError(f"Generated program {manifest} differs from the validated {version['program']}")
 
     build_dir = ROOT / "build" / "recomp-program"
-    generator = ["-A", "x64"] if windows else ["-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
+    # A build folder cannot change generator; earlier Windows builds used
+    # Visual Studio, then Ninja with w64devkit's GCC.
+    generator = ["-G", "MinGW Makefiles" if windows else "Ninja", "-DCMAKE_BUILD_TYPE=Release"]
+    cache = build_dir / "CMakeCache.txt"
+    if cache.exists() and f"CMAKE_GENERATOR:INTERNAL={generator[1]}\n" not in cache.read_text(errors="replace"):
+        shutil.rmtree(build_dir)
+    if windows:
+        generator += ["-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++"]
     if sys.platform.startswith("linux"):
         generator.append("-DRECOMP_FETCH_SDL3=ON")  # used only when the system has no SDL3
     run_logged(["cmake", "-S", ROOT / "recomp-runtime", "-B", build_dir, *generator,
@@ -266,8 +292,7 @@ def build(source, movies=True, extractor=None):
     # Linux builds the settings launcher beside the runner; SteamOS has no compiler.
     targets = ["recomp_program_runner"] + (["recomp_launcher"] if sys.platform.startswith("linux") else [])
     # Generated chunks are large; more jobs than this can exhaust memory.
-    jobs = ["--parallel", str(min(4, os.cpu_count() or 1))] if not windows else []
-    run_logged(["cmake", "--build", build_dir, "--config", "Release", *jobs,
+    run_logged(["cmake", "--build", build_dir, "--parallel", str(min(4, os.cpu_count() or 1)),
                 "--target", *targets], work / "build.log")
     (ROOT / "private" / "disc-path.txt").write_text(str(disc) + "\n", encoding="utf-8")
     # What is installed, for the launchers and the play scripts.

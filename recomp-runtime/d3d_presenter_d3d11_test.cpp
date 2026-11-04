@@ -1818,14 +1818,81 @@ static bool testWidescreenClientWidth()
     return presentClientWidth(&presenter, 480u) == 640u;
 }
 
+static bool sameViewport(const D3D11_VIEWPORT &v, float x, float y, float w, float h)
+{
+    return v.TopLeftX == x && v.TopLeftY == y && v.Width == w && v.Height == h;
+}
+
+static bool testFitViewport()
+{
+    RecompD3dPresenter presenter{};
+    presenter.widescreen = true;
+    // Issue #45: 16:9 letterboxes on 16:10 and pillarboxes on 21:9; the
+    // 16:10 shape fills a 16:10 screen.
+    if (!sameViewport(fitViewport(&presenter, 1920u, 1200u), 0.0f, 60.0f, 1920.0f, 1080.0f)) return false;
+    if (!sameViewport(fitViewport(&presenter, 2560u, 1080u), 320.0f, 0.0f, 1920.0f, 1080.0f)) return false;
+    if (!sameViewport(fitViewport(&presenter, 854u, 480u), 0.0f, 0.0f, 854.0f, 480.0f)) return false;
+    presenter.aspect_w = 16u;
+    presenter.aspect_h = 10u;
+    if (!sameViewport(fitViewport(&presenter, 1920u, 1200u), 0.0f, 0.0f, 1920.0f, 1200.0f)) return false;
+    presenter.widescreen = false;
+    return sameViewport(fitViewport(&presenter, 1920u, 1200u), 160.0f, 0.0f, 1600.0f, 1200.0f) &&
+        sameViewport(fitViewport(&presenter, 640u, 480u), 0.0f, 0.0f, 640.0f, 480.0f);
+}
+
 static bool testWidescreen2dSqueeze()
 {
     /* Observed DOA3 quads at 720 wide and 16:9: subtitle glyph, watermark,
        full-screen flash, pillarboxed movie. */
-    return squeezeWidescreen2d(222.5f, 236.0f, 720.0f) &&
-        squeezeWidescreen2d(340.5f, 750.1f, 720.0f) &&
-        !squeezeWidescreen2d(0.5f, 720.5f, 720.0f) &&
-        !squeezeWidescreen2d(90.0f, 630.0f, 720.0f);
+    return recomp_squeeze_widescreen_2d(222.5f, 236.0f, 720.0f) &&
+        recomp_squeeze_widescreen_2d(340.5f, 750.1f, 720.0f) &&
+        !recomp_squeeze_widescreen_2d(0.5f, 720.5f, 720.0f) &&
+        !recomp_squeeze_widescreen_2d(90.0f, 630.0f, 720.0f);
+}
+
+static bool widescreenShape(const char *value, unsigned w, unsigned h)
+{
+    unsigned aspect_w = 0u, aspect_h = 0u;
+    _putenv_s("RECOMP_D3D_WIDESCREEN", value);
+    const bool wide = recomp_widescreen(&aspect_w, &aspect_h);
+    _putenv_s("RECOMP_D3D_WIDESCREEN", "");
+    return wide && aspect_w == w && aspect_h == h;
+}
+
+static bool testWidescreenShape()
+{
+    // A shape from 4:3 to 4:1 is kept; anything else falls back to 16:9.
+    return widescreenShape("16:10", 16u, 10u) && widescreenShape("3440:1440", 3440u, 1440u) &&
+        widescreenShape("1", 16u, 9u) && widescreenShape("16:10junk", 16u, 9u) &&
+        widescreenShape("5760:1080", 16u, 9u) && widescreenShape("4294967312:10", 16u, 9u);
+}
+
+static bool sameScale(const RecompWidescreen2dScale &scale, float x, float y)
+{
+    return std::fabs(scale.x - x) < 1e-4f && std::fabs(scale.y - y) < 1e-4f;
+}
+
+static bool testWidescreen2dScale()
+{
+    RecompD3dPresenter presenter{};
+    presenter.config.width = 720u;
+    presenter.config.height = 480u;
+    presenter.aspect_w = 16u;
+    presenter.aspect_h = 10u;
+    // 16:10: the HUD narrows to 5/6, 4:3 film widens to keep its shape,
+    // zoomed 16:9 film letterboxes, and a fade is left alone.
+    if (!sameScale(widescreen2dScale(&presenter, 200.0f, 300.0f, 10.0f, 40.0f), 5.0f / 6.0f, 1.0f) ||
+        !sameScale(widescreen2dScale(&presenter, 90.0f, 630.0f, 0.0f, 480.0f), 10.0f / 9.0f, 1.0f) ||
+        !sameScale(widescreen2dScale(&presenter, 0.0f, 720.0f, -80.0f, 560.0f), 1.0f, 0.9f) ||
+        !sameScale(widescreen2dScale(&presenter, 0.0f, 720.0f, 0.0f, 480.0f), 1.0f, 1.0f)) {
+        return false;
+    }
+    // 21:9 (2560x1080): everything narrows, and zoomed film pillarboxes.
+    presenter.aspect_w = 64u;
+    presenter.aspect_h = 27u;
+    return sameScale(widescreen2dScale(&presenter, 200.0f, 300.0f, 10.0f, 40.0f), 0.5625f, 1.0f) &&
+        sameScale(widescreen2dScale(&presenter, 90.0f, 630.0f, 0.0f, 480.0f), 0.75f, 1.0f) &&
+        sameScale(widescreen2dScale(&presenter, 0.0f, 720.0f, -80.0f, 560.0f), 0.75f, 1.0f);
 }
 
 static bool testTargetLifetimes(
@@ -2490,8 +2557,20 @@ int main()
         std::fprintf(stderr, "FAIL widescreen client width\n");
         return 1;
     }
+    if (!testFitViewport()) {
+        std::fprintf(stderr, "FAIL fit viewport\n");
+        return 1;
+    }
     if (!testWidescreen2dSqueeze()) {
         std::fprintf(stderr, "FAIL widescreen 2D squeeze\n");
+        return 1;
+    }
+    if (!testWidescreen2dScale()) {
+        std::fprintf(stderr, "FAIL widescreen 2D scale\n");
+        return 1;
+    }
+    if (!testWidescreenShape()) {
+        std::fprintf(stderr, "FAIL widescreen shape\n");
         return 1;
     }
     FrameRateCounter counter;
