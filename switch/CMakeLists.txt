@@ -307,10 +307,13 @@ set_source_files_properties(${_recomp_program_sources} PROPERTIES
 set_property(SOURCE "${NX_SRC}/nx_main.cpp" APPEND PROPERTY COMPILE_DEFINITIONS
     "DOA3_NX_BUILD_INFO=\"pgo=${DOA3_NX_PGO} opt=${DOA3_NX_GENERATED_OPT} native=${DOA3_NX_NATIVE} profile=${DOA3_NX_FUNC_PROFILE}\"")
 # x87 rounding: no fused multiply-add in the native math.
-set_source_files_properties("${NX_SRC}/doa3_nx_math.c" PROPERTIES COMPILE_OPTIONS "-O2;-ffp-contract=off")
+set_source_files_properties("${NX_SRC}/doa3_nx_math.c" PROPERTIES COMPILE_OPTIONS "-O3;-ffp-contract=off")
 # Direct (not GOT) access to globals from C, and libm calls such as sqrt
 # inlined as instructions: errno is never read after them.
 target_compile_options(doa3-nx PRIVATE
+    # The host runtime and Switch GL presenter are draw-path hot code too;
+    # optimize them at the same level as the lifted program by default.
+    -O3
     "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/doa3_nx_visibility.h>"
     "$<$<COMPILE_LANGUAGE:C>:-fno-math-errno>")
 target_link_options(doa3-nx PRIVATE "-Wl,--wrap=exit" "-Wl,--wrap=abort" "-Wl,--wrap=setvbuf" "-Wl,--wrap=pthread_create"

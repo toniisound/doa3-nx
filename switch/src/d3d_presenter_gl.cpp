@@ -167,6 +167,13 @@ struct QueuedDraw {
     uint32_t program_offset = kNoProgramConstants;
 };
 
+struct VertexSeenEntry {
+    const void *bytes = nullptr;
+    uint32_t size = 0;
+    uint32_t offset = 0;
+    uint32_t generation = 0;
+};
+
 struct DrawSegment {
     GLuint target_color = 0;
     GLuint target_depth = 0; // renderbuffer
@@ -178,8 +185,35 @@ struct DrawSegment {
     std::vector<QueuedDraw> draws;
     // Vertex spans already in vertex_data: captured payload pointers are
     // stable within a packet, so the same pointer and size is the same data.
-    std::unordered_map<const void *, std::pair<uint32_t, uint32_t>> vertex_seen; // size, offset
+    // A fixed open-addressed table avoids per-entry allocations in this
+    // per-draw hot path. Generation changes make clearing it O(1).
+    static constexpr uint32_t kVertexSeenSlots = 2048u;
+    VertexSeenEntry vertex_seen[kVertexSeenSlots]{};
+    uint32_t vertex_seen_generation = 1u;
 };
+
+VertexSeenEntry *findVertexSeenSlot(DrawSegment &segment, const void *bytes)
+{
+    uintptr_t key = reinterpret_cast<uintptr_t>(bytes) >> 4u;
+    key ^= key >> 17u;
+    key *= static_cast<uintptr_t>(0xed5ad4bbu);
+    key ^= key >> 11u;
+    uint32_t slot = static_cast<uint32_t>(key) & (DrawSegment::kVertexSeenSlots - 1u);
+    for (uint32_t probe = 0u; probe < DrawSegment::kVertexSeenSlots; ++probe) {
+        VertexSeenEntry &entry = segment.vertex_seen[slot];
+        if (entry.generation != segment.vertex_seen_generation || entry.bytes == bytes) return &entry;
+        slot = (slot + 1u) & (DrawSegment::kVertexSeenSlots - 1u);
+    }
+    return nullptr;
+}
+
+void clearVertexSeen(DrawSegment &segment)
+{
+    if (++segment.vertex_seen_generation == 0u) {
+        for (VertexSeenEntry &entry : segment.vertex_seen) entry.generation = 0u;
+        segment.vertex_seen_generation = 1u;
+    }
+}
 
 GLenum glBlendFactor(RecompD3dBlendFactor factor, bool alpha_channel)
 {
@@ -1339,7 +1373,7 @@ void flushSegment(RecompD3dPresenter *p)
         seg.vertex_data.clear();
         seg.index_data.clear();
         seg.uniform_data.clear();
-        seg.vertex_seen.clear();
+        clearVertexSeen(seg);
         return;
     }
 
@@ -1442,7 +1476,7 @@ void flushSegment(RecompD3dPresenter *p)
     seg.vertex_data.clear();
     seg.index_data.clear();
     seg.uniform_data.clear();
-    seg.vertex_seen.clear();
+    clearVertexSeen(seg);
 }
 
 bool initEgl(RecompD3dPresenter *p)
@@ -1849,9 +1883,10 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
         auto &vdata = p->segment.vertex_data;
         const uint32_t v_size = draw.vertex_stride * draw.vertex_count;
         uint32_t v_offset;
-        auto seen = p->segment.vertex_seen.find(draw.vertex_bytes);
-        if (seen != p->segment.vertex_seen.end() && seen->second.first == v_size) {
-            v_offset = seen->second.second;
+        VertexSeenEntry *seen = findVertexSeenSlot(p->segment, draw.vertex_bytes);
+        if (seen != nullptr && seen->generation == p->segment.vertex_seen_generation &&
+            seen->bytes == draw.vertex_bytes && seen->size == v_size) {
+            v_offset = seen->offset;
             doa3_nx_counter_add(3, v_size);
         } else {
             v_offset = static_cast<uint32_t>(vdata.size());
@@ -1861,7 +1896,12 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             }
             const auto *v_src = static_cast<const uint8_t *>(draw.vertex_bytes);
             vdata.insert(vdata.end(), v_src, v_src + v_size);
-            p->segment.vertex_seen[draw.vertex_bytes] = {v_size, v_offset};
+            if (seen != nullptr) {
+                seen->bytes = draw.vertex_bytes;
+                seen->size = v_size;
+                seen->offset = v_offset;
+                seen->generation = p->segment.vertex_seen_generation;
+            }
         }
 
         auto &idata = p->segment.index_data;

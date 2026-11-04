@@ -72,25 +72,71 @@ static inline __attribute__((always_inline)) double dot3(uint32_t a0, uint32_t b
     return s;
 }
 
+// Same x87-compatible dot product when a caller has already resolved its RAM
+// spans. This lets a batch of matrix transforms reuse one bounds check and
+// the same loaded vector instead of resolving every scalar guest address.
+static inline __attribute__((always_inline)) double dot3_values(float x0, float y0, float x1,
+    float y1, float x2, float y2, int translate, float t)
+{
+    if ((g_fp_control_word & 0x300u) == 0u) {
+        const float p0 = x0 * y0, p1 = x1 * y1, p2 = x2 * y2;
+        const float s1 = p0 + p1, s2 = s1 + p2;
+        const float s3 = translate ? s2 + t : s2;
+        if (product_plain(p0, x0, y0) && product_plain(p1, x1, y1) && product_plain(p2, x2, y2) &&
+            plain(s1) && plain(s2) && plain(s3)) {
+            return s3;
+        }
+    }
+    const double p0 = PC((double)x0 * (double)y0);
+    const double p1 = PC((double)x1 * (double)y1);
+    const double p2 = PC((double)x2 * (double)y2);
+    double sum = PC(p0 + p1);
+    sum = PC(sum + p2);
+    if (translate) sum = PC(sum + (double)t);
+    return sum;
+}
+
 // Vector (ECX) times the current matrix, rows 0-2 plus the translation row,
 // into EDX. The z bits end up in EAX, ECX and the slot ECX was pushed to.
 static inline __attribute__((always_inline)) void transform_current(int translate)
 {
     const uint32_t v = ecx, out = edx, m = CURRENT_MATRIX;
     double r[3];
+    uint32_t z_bits = 0u;
+    const uint8_t *matrix_bytes = recomp_memory_ram(m, 16u * sizeof(float));
+    const uint8_t *vector_bytes = recomp_memory_ram(v, 3u * sizeof(float));
+    uint8_t *out_bytes = recomp_memory_ram(out, 3u * sizeof(float));
+    uint8_t *stack_bytes = recomp_memory_ram(esp - 4u, sizeof(uint32_t));
+    if (matrix_bytes != NULL && vector_bytes != NULL && out_bytes != NULL && stack_bytes != NULL) {
+        const float *matrix = (const float *)(const void *)matrix_bytes;
+        const float *vector = (const float *)(const void *)vector_bytes;
 #pragma GCC unroll 3
-    for (uint32_t c = 0u; c < 3u; ++c) {
-        r[c] = dot3(m + c * 4u, v, m + 0x10u + c * 4u, v + 4u, m + 0x20u + c * 4u, v + 8u,
-            translate, m + 0x30u + c * 4u);
+        for (uint32_t c = 0u; c < 3u; ++c) {
+            r[c] = dot3_values(matrix[c], vector[0], matrix[4u + c], vector[1],
+                matrix[8u + c], vector[2], translate, matrix[12u + c]);
+        }
+        const float z = (float)r[2];
+        __builtin_memcpy(&z_bits, &z, sizeof z_bits);
+        *(uint32_t *)(void *)stack_bytes = z_bits; // fstp into the pushed ECX slot
+        eax = z_bits;
+        float *out_values = (float *)(void *)out_bytes;
+        out_values[0] = (float)r[0];
+        ((uint32_t *)(void *)out_bytes)[2] = z_bits;
+        out_values[1] = (float)r[1];
+    } else {
+#pragma GCC unroll 3
+        for (uint32_t c = 0u; c < 3u; ++c) {
+            r[c] = dot3(m + c * 4u, v, m + 0x10u + c * 4u, v + 4u, m + 0x20u + c * 4u, v + 8u,
+                translate, m + 0x30u + c * 4u);
+        }
+        const float z = (float)r[2];
+        __builtin_memcpy(&z_bits, &z, sizeof z_bits);
+        MEM32(esp - 4u) = z_bits; // fstp into the pushed ECX slot
+        eax = z_bits;
+        MEMF(out) = (float)r[0];
+        MEM32(out + 8u) = z_bits;
+        MEMF(out + 4u) = (float)r[1];
     }
-    const float z = (float)r[2];
-    uint32_t z_bits;
-    __builtin_memcpy(&z_bits, &z, sizeof z_bits);
-    MEM32(esp - 4u) = z_bits; // fstp into the pushed ECX slot
-    eax = z_bits;
-    MEMF(out) = (float)r[0];
-    MEM32(out + 8u) = z_bits;
-    MEMF(out + 4u) = (float)r[1];
     ecx = z_bits;
     esp += 4u;
 }
