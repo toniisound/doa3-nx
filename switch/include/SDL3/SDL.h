@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
    The few SDL3 calls the runtime's C modules make (costume_inject.c,
    free_camera_adapter.c) for desktop keyboard shortcuts. The Switch has no
-   keyboard: every key reads up, and SDL_GetTicks counts milliseconds. */
+   keyboard: every key reads up; the two tick functions use CLOCK_MONOTONIC. */
 #ifndef DOA3_NX_SDL_SHIM_H
 #define DOA3_NX_SDL_SHIM_H
 
@@ -33,6 +33,13 @@ static inline uint64_t SDL_GetTicks(void)
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
+static inline uint64_t SDL_GetTicksNS(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
 }
 
 #endif
