@@ -63,6 +63,28 @@ jobs:
           }
           exit 0
 
+  # The toolchain tools/build_game.py downloads for players.
+  runtime-tests-mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download the pinned llvm-mingw and CMake
+        shell: pwsh
+        run: |
+          python -c "import sys; sys.path.insert(0, 'tools'); import build_game; print(*build_game.windows_tools(), sep='\n')" |
+            Select-Object -Last 2 | Add-Content $env:GITHUB_PATH
+      - name: Configure public runtime tests
+        run: >-
+          cmake -S recomp-runtime -B build/recomp-runtime -G "MinGW Makefiles"
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+      - name: Build public runtime tests
+        run: cmake --build build/recomp-runtime
+      - name: Run public runtime tests
+        run: ctest --test-dir build/recomp-runtime --output-on-failure
+
   runtime-tests-macos:
     runs-on: macos-latest
     steps:

@@ -14,7 +14,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #ifdef RECOMP_FULL_PROGRAM
 #include "d3d_frame_adapter.h"
@@ -193,8 +192,7 @@ static bool pressed(const RecompInputGamepad *g, unsigned analog)
 
 static double seconds_now(void)
 {
-    struct timespec now;
-    return timespec_get(&now, TIME_UTC) == 0 ? 0.0 : (double)now.tv_sec + now.tv_nsec / 1e9;
+    return (double)SDL_GetTicksNS() / 1e9;
 }
 
 static void set_active(bool active)

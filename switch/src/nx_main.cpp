@@ -33,7 +33,9 @@ extern "C" void __real_exit(int code) __attribute__((noreturn));
 
 extern "C" int doa3_nx_native_enabled; // doa3_nx_math.c
 
-extern "C" int doa3_nx_boot_menu(int initial_height, const char *version); // boot_menu.cpp
+extern "C" int doa3_nx_boot_menu(int initial_height, int initial_widescreen,
+    int *selected_widescreen, int initial_show_fps, int *selected_show_fps,
+    const uint16_t *font, const char *version); // boot_menu.cpp
 extern "C" {
 static void flushLog(void); // below, with the log devoptab
 }
@@ -50,6 +52,7 @@ const char kLog[] = "sdmc:/switch/doa3-nx/doa3-nx.log";
 const char kRunnerXbe[] = "/switch/doa3-nx/disc/default.xbe";
 
 bool console_ready = false;
+PrintConsole *console_state = nullptr;
 
 bool fileExists(const char *path)
 {
@@ -225,6 +228,7 @@ void userAppExit(void)
     }
     if (console_ready) {
         consoleExit(nullptr);
+        console_state = nullptr;
         console_ready = false;
     }
 }
@@ -289,6 +293,7 @@ void doa3_nx_release_console(void)
     presenter_owns_console = true;
     if (console_ready) {
         consoleExit(nullptr);
+        console_state = nullptr;
         console_ready = false;
     }
     mutexUnlock(&console_mutex);
@@ -335,6 +340,7 @@ struct BootOptions {
     bool gl_vsync = false;
     bool unpaced = false;
     bool widescreen = true;
+    bool show_fps = true;
     int resolution = 600; // render height: 720, 600 or 480 (the boot menu; 600 by default)
 };
 
@@ -347,8 +353,8 @@ void writeOptions(const BootOptions &options)
         "; boot menu (720, 600 or 480). Holding a button at boot also switches one\n"
         "; for that run: X native_math off, Y texcheck_once on, ZL soft_vblank off,\n"
         "; L gl_vsync on, R unpaced on.\n"
-        "resolution=%d\nwidescreen=%d\nnative_math=%d\nsoft_vblank=%d\ntexcheck_once=%d\ngl_vsync=%d\nunpaced=%d\n",
-        options.resolution, options.widescreen, options.native_math, options.soft_vblank,
+        "resolution=%d\nwidescreen=%d\nshow_fps=%d\nnative_math=%d\nsoft_vblank=%d\ntexcheck_once=%d\ngl_vsync=%d\nunpaced=%d\n",
+        options.resolution, options.widescreen, options.show_fps, options.native_math, options.soft_vblank,
         options.texcheck_once, options.gl_vsync, options.unpaced);
     std::fclose(out);
 }
@@ -374,6 +380,7 @@ BootOptions readOptions()
         else if (!std::strcmp(key, "gl_vsync")) options.gl_vsync = on;
         else if (!std::strcmp(key, "unpaced")) options.unpaced = on;
         else if (!std::strcmp(key, "widescreen")) options.widescreen = on;
+        else if (!std::strcmp(key, "show_fps")) options.show_fps = on;
         else if (!std::strcmp(key, "resolution") && (value == 720 || value == 600 || value == 480))
             options.resolution = value;
     }
@@ -387,13 +394,21 @@ BootOptions readOptions()
 bool chooseResolution(PadState &pad, BootOptions &options)
 {
     (void)pad;
+    const uint16_t *font = console_state != nullptr ?
+        static_cast<const uint16_t *>(console_state->font.gfx) : nullptr;
     consoleExit(nullptr);
+    console_state = nullptr;
     console_ready = false;
-    const int height = doa3_nx_boot_menu(options.resolution, DOA3_NX_VERSION);
-    consoleInit(nullptr);
+    int widescreen = options.widescreen ? 1 : 0;
+    int show_fps = options.show_fps ? 1 : 0;
+    const int height = doa3_nx_boot_menu(options.resolution, widescreen, &widescreen,
+        show_fps, &show_fps, font, DOA3_NX_VERSION);
+    console_state = consoleInit(nullptr);
     console_ready = true;
     if (height == 0) return false;
     options.resolution = height;
+    options.widescreen = widescreen != 0;
+    options.show_fps = show_fps != 0;
     return true;
 }
 
@@ -403,7 +418,7 @@ int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    consoleInit(nullptr);
+    console_state = consoleInit(nullptr);
     console_ready = true;
     redirectStderrToLog();
     std::fprintf(stderr, "DOA3 NX %s (Toniisound), based on NoRain211/doa3-re\n",
@@ -457,12 +472,10 @@ int main(int argc, char **argv)
     // There is no CPU boost: boost mode would drop the GPU to 76.8 MHz; clock
     // the console with sys-clk instead.
     if (options.unpaced) setenv("RECOMP_UNPACED", "1", 1);
+    setenv("RECOMP_SHOW_FPS", options.show_fps ? "1" : "0", 1);
     // soft_vblank: a frame a little over 16.7 ms starts the next one at once
     // instead of waiting a whole refresh (see d3d_vblank.cpp).
     if (options.soft_vblank) setenv("RECOMP_SOFT_VBLANK", "1", 1);
-    // widescreen: the Xbox's widescreen video flag; the game draws 16:9 and
-    // the renderer fills the screen (0: 4:3 with side bars).
-    if (options.widescreen) setenv("RECOMP_D3D_WIDESCREEN", "1", 1);
     // native_math: native versions of the hottest math helpers (doa3_nx_math.c).
     doa3_nx_native_enabled = options.native_math ? 1 : 0;
     // texcheck_once: check cached textures once a frame, not on every draw
@@ -477,6 +490,9 @@ int main(int argc, char **argv)
         return 0;
     }
     writeOptions(options); // remembers the choice for the next menu
+    // The Xbox's widescreen flag selects 16:9; zero keeps the 4:3 image with
+    // side bars on widescreen output.
+    setenv("RECOMP_D3D_WIDESCREEN", options.widescreen ? "1" : "0", 1);
     {
         // The game renders 640x480; the presenter scales it to this height.
         char scale[16];

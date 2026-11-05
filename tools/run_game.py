@@ -123,9 +123,11 @@ def launcher_settings():
     """The choices launcher.sh saved, as the variables Launcher.exe sets."""
     try:
         settings = json.loads((ROOT / "private" / "launcher.json").read_text(encoding="utf-8"))
+        # Settings saved before 16:10 hold a widescreen flag.
+        screen = settings.get("screen") or ("16:9" if settings.get("widescreen") else "4:3")
         return {"RECOMP_D3D_SCALE": f"{int(settings.get('height', 480)) / 480:.4f}",
                 "RECOMP_D3D_MSAA": str(int(settings.get("msaa", 1))),
-                "RECOMP_D3D_WIDESCREEN": "1" if settings.get("widescreen") else "0",
+                "RECOMP_D3D_WIDESCREEN": "0" if screen == "4:3" else str(screen),
                 "RECOMP_AUDIO_GAIN": f"{int(settings.get('volume', 100)) / 100:.4f}",
                 "RECOMP_FREE_CAMERA": "1" if settings.get("free_camera") else "0"}
     except (OSError, ValueError, TypeError, AttributeError, OverflowError):

@@ -16,7 +16,25 @@ int main()
     format.nBlockAlign = 8;
     format.nAvgBytesPerSec = 384000;
     XAPO_LOCKFORPROCESS_BUFFER_PARAMETERS lock{&format, 4};
+    IXAPO *xapo = nullptr;
+    check(SUCCEEDED(effect->QueryInterface(__uuidof(IXAPO), reinterpret_cast<void **>(&xapo))) &&
+        xapo == effect && effect->Release() == 1);
+    XAPO_REGISTRATION_PROPERTIES *registration = nullptr;
+    check(SUCCEEDED(effect->GetRegistrationProperties(&registration)) &&
+        registration->Flags == properties.Flags && registration->MaxInputBufferCount == 1);
+    CoTaskMemFree(registration);
+    WAVEFORMATEX pcm16 = format;
+    pcm16.wFormatTag = WAVE_FORMAT_PCM;
+    pcm16.wBitsPerSample = 16;
+    WAVEFORMATEX *suggested = nullptr;
+    check(effect->IsInputFormatSupported(&format, &pcm16, &suggested) == XAPO_E_FORMAT_UNSUPPORTED &&
+        suggested && suggested->wFormatTag == WAVE_FORMAT_IEEE_FLOAT && suggested->nChannels == 2);
+    CoTaskMemFree(suggested);
+    check(effect->IsOutputFormatSupported(&format, &format, &suggested) == S_OK && !suggested);
+    XAPO_LOCKFORPROCESS_BUFFER_PARAMETERS lock16{&pcm16, 4};
+    check(effect->LockForProcess(1, &lock16, 1, &lock16) == XAPO_E_FORMAT_UNSUPPORTED);
     check(SUCCEEDED(effect->LockForProcess(1, &lock, 1, &lock)));
+    check(FAILED(effect->LockForProcess(1, &lock, 1, &lock)));
     float pcm[] = {0.25f, -0.5f, 0.75f, -1.0f};
     XAPO_PROCESS_BUFFER_PARAMETERS input{pcm, XAPO_BUFFER_VALID, 2};
     XAPO_PROCESS_BUFFER_PARAMETERS output{pcm, XAPO_BUFFER_SILENT, 2};
@@ -34,5 +52,5 @@ int main()
     check(effect->used == effect->samples.size());
     effect->UnlockForProcess();
     effect->Release();
-    std::puts("PASS audio capture passthrough, silence, capacity");
+    std::puts("PASS audio capture interface, formats, passthrough, silence, capacity");
 }

@@ -167,6 +167,13 @@ struct QueuedDraw {
     uint32_t program_offset = kNoProgramConstants;
 };
 
+struct VertexSeenEntry {
+    const void *bytes = nullptr;
+    uint32_t size = 0;
+    uint32_t offset = 0;
+    uint32_t generation = 0;
+};
+
 struct DrawSegment {
     GLuint target_color = 0;
     GLuint target_depth = 0; // renderbuffer
@@ -178,8 +185,35 @@ struct DrawSegment {
     std::vector<QueuedDraw> draws;
     // Vertex spans already in vertex_data: captured payload pointers are
     // stable within a packet, so the same pointer and size is the same data.
-    std::unordered_map<const void *, std::pair<uint32_t, uint32_t>> vertex_seen; // size, offset
+    // A fixed open-addressed table avoids per-entry allocations in this
+    // per-draw hot path. Generation changes make clearing it O(1).
+    static constexpr uint32_t kVertexSeenSlots = 2048u;
+    VertexSeenEntry vertex_seen[kVertexSeenSlots]{};
+    uint32_t vertex_seen_generation = 1u;
 };
+
+VertexSeenEntry *findVertexSeenSlot(DrawSegment &segment, const void *bytes)
+{
+    uintptr_t key = reinterpret_cast<uintptr_t>(bytes) >> 4u;
+    key ^= key >> 17u;
+    key *= static_cast<uintptr_t>(0xed5ad4bbu);
+    key ^= key >> 11u;
+    uint32_t slot = static_cast<uint32_t>(key) & (DrawSegment::kVertexSeenSlots - 1u);
+    for (uint32_t probe = 0u; probe < DrawSegment::kVertexSeenSlots; ++probe) {
+        VertexSeenEntry &entry = segment.vertex_seen[slot];
+        if (entry.generation != segment.vertex_seen_generation || entry.bytes == bytes) return &entry;
+        slot = (slot + 1u) & (DrawSegment::kVertexSeenSlots - 1u);
+    }
+    return nullptr;
+}
+
+void clearVertexSeen(DrawSegment &segment)
+{
+    if (++segment.vertex_seen_generation == 0u) {
+        for (VertexSeenEntry &entry : segment.vertex_seen) entry.generation = 0u;
+        segment.vertex_seen_generation = 1u;
+    }
+}
 
 GLenum glBlendFactor(RecompD3dBlendFactor factor, bool alpha_channel)
 {
@@ -694,6 +728,18 @@ void main() {
 }
 )";
 
+const char kFpsVertex[] = R"(#version 430 core
+layout(location = 0) in vec2 in_pos;
+layout(location = 1) in vec4 in_color;
+layout(location = 0) out vec4 v_color;
+void main() { gl_Position = vec4(in_pos, 0.0, 1.0); v_color = in_color; }
+)";
+const char kFpsFragment[] = R"(#version 430 core
+layout(location = 0) in vec4 v_color;
+layout(location = 0) out vec4 out_color;
+void main() { out_color = v_color; }
+)";
+
 GLuint compileShader(GLenum stage, const std::string &source, uint64_t key)
 {
     GLuint shader = glCreateShader(stage);
@@ -781,6 +827,13 @@ struct RecompD3dPresenter {
     GLuint present_program = 0;
     GLint present_rect = -1, present_gamma = -1;
     GLuint empty_vao = 0;
+    bool fps_overlay = false;
+    GLuint fps_program = 0, fps_vao = 0, fps_vbo = 0;
+    GLsizei fps_vertex_count = 0;
+    std::vector<float> fps_vertices;
+    std::chrono::steady_clock::time_point fps_window_start{};
+    uint32_t fps_window_frames = 0;
+    float fps_value = 0.0f;
 
     // Bound GL state, so draws skip redundant calls.
     DrawState bound{};
@@ -1339,7 +1392,7 @@ void flushSegment(RecompD3dPresenter *p)
         seg.vertex_data.clear();
         seg.index_data.clear();
         seg.uniform_data.clear();
-        seg.vertex_seen.clear();
+        clearVertexSeen(seg);
         return;
     }
 
@@ -1442,7 +1495,7 @@ void flushSegment(RecompD3dPresenter *p)
     seg.vertex_data.clear();
     seg.index_data.clear();
     seg.uniform_data.clear();
-    seg.vertex_seen.clear();
+    clearVertexSeen(seg);
 }
 
 bool initEgl(RecompD3dPresenter *p)
@@ -1529,6 +1582,91 @@ void destroyEgl(RecompD3dPresenter *p)
     p->surface = EGL_NO_SURFACE;
 }
 
+uint8_t fpsGlyphRow(char c, int row)
+{
+    static constexpr uint8_t digits[10][5] = {
+        {7,5,5,5,7}, {2,6,2,2,7}, {7,1,7,4,7}, {7,1,7,1,7}, {5,5,7,1,1},
+        {7,4,7,1,7}, {7,4,7,5,7}, {7,1,2,2,2}, {7,5,7,5,7}, {7,5,7,1,7}
+    };
+    if (row < 0 || row >= 5) return 0;
+    if (c >= '0' && c <= '9') return digits[c - '0'][row];
+    switch (c) {
+    case 'F': { static constexpr uint8_t r[5] = {7,4,6,4,4}; return r[row]; }
+    case 'P': { static constexpr uint8_t r[5] = {6,5,6,4,4}; return r[row]; }
+    case 'S': { static constexpr uint8_t r[5] = {3,4,6,1,6}; return r[row]; }
+    default: return 0;
+    }
+}
+
+void appendFpsRect(std::vector<float> &v, float x0, float y0, float x1, float y1,
+    float r, float g, float b, float a, uint32_t width, uint32_t height)
+{
+    const float l = 2.0f * x0 / width - 1.0f, rt = 2.0f * x1 / width - 1.0f;
+    const float t = 1.0f - 2.0f * y0 / height, bt = 1.0f - 2.0f * y1 / height;
+    const float q[6][2] = {{l,t},{l,bt},{rt,t},{rt,t},{l,bt},{rt,bt}};
+    for (const auto &pt : q) {
+        v.push_back(pt[0]); v.push_back(pt[1]);
+        v.push_back(r); v.push_back(g); v.push_back(b); v.push_back(a);
+    }
+}
+
+void rebuildFpsOverlay(RecompD3dPresenter *p)
+{
+    char label[24];
+    std::snprintf(label, sizeof label, "FPS %u", static_cast<unsigned>(p->fps_value + 0.5f));
+    p->fps_vertices.clear();
+    constexpr float scale = 4.0f, pad = 6.0f;
+    const float width = (static_cast<float>(std::strlen(label) * 4u - 1u)) * scale;
+    appendFpsRect(p->fps_vertices, 12.0f, 12.0f, 24.0f + width + pad,
+        24.0f + 5.0f * scale + pad, 0.0f, 0.0f, 0.0f, 0.72f, p->window_w, p->window_h);
+    float x = 12.0f + pad;
+    for (const char *ch = label; *ch; ++ch, x += 4.0f * scale) {
+        for (int row = 0; row < 5; ++row) {
+            const uint8_t bits = fpsGlyphRow(*ch, row);
+            for (int col = 0; col < 3; ++col) if (bits & (1u << (2 - col))) {
+                const float y = 12.0f + pad + row * scale;
+                appendFpsRect(p->fps_vertices, x + col * scale, y, x + (col + 1) * scale,
+                    y + scale, 1.0f, 1.0f, 1.0f, 1.0f, p->window_w, p->window_h);
+            }
+        }
+    }
+    p->fps_vertex_count = static_cast<GLsizei>(p->fps_vertices.size() / 6u);
+    glBindBuffer(GL_ARRAY_BUFFER, p->fps_vbo);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(p->fps_vertices.size() * sizeof(float)),
+        p->fps_vertices.data(), GL_DYNAMIC_DRAW);
+}
+
+void drawFpsOverlay(RecompD3dPresenter *p)
+{
+    if (!p->fps_overlay || p->fps_program == 0 || p->fps_vertex_count == 0) return;
+    using Clock = std::chrono::steady_clock;
+    const auto now = Clock::now();
+    ++p->fps_window_frames;
+    const double elapsed = std::chrono::duration<double>(now - p->fps_window_start).count();
+    if (elapsed >= 1.0) {
+        p->fps_value = static_cast<float>(p->fps_window_frames / elapsed);
+        p->fps_window_frames = 0;
+        p->fps_window_start = now;
+        rebuildFpsOverlay(p);
+    }
+    glClipControlPtr(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, static_cast<GLsizei>(p->window_w), static_cast<GLsizei>(p->window_h));
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(p->fps_program);
+    glBindVertexArray(p->fps_vao);
+    glDrawArrays(GL_TRIANGLES, 0, p->fps_vertex_count);
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
+    glClipControlPtr(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
+    p->bound_valid = false;
+}
+
 void presentFrame(RecompD3dPresenter *p)
 {
     StageTimer timer(5);  // includes the swap, reported separately too
@@ -1562,6 +1700,7 @@ void presentFrame(RecompD3dPresenter *p)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     glClipControlPtr(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
+    drawFpsOverlay(p);
 
     // GL errors are not checked per call; report the first few per second.
     static uint32_t error_reports = 0;
@@ -1597,6 +1736,8 @@ RecompD3dPresenterError gl_backend_create(const RecompD3dPresenterConfig *config
     }
     const char *widescreen = std::getenv("RECOMP_D3D_WIDESCREEN");
     p->widescreen = widescreen != nullptr && std::strcmp(widescreen, "0") != 0;
+    const char *show_fps = std::getenv("RECOMP_SHOW_FPS");
+    p->fps_overlay = show_fps != nullptr && std::strcmp(show_fps, "0") != 0;
     const char *flip = std::getenv("RECOMP_GL_FLIP_WINDING");
     p->flip_winding = flip != nullptr && std::strcmp(flip, "0") != 0;
     if (appletGetOperationMode() == AppletOperationMode_Console) {
@@ -1670,6 +1811,31 @@ RecompD3dPresenterError gl_backend_create(const RecompD3dPresenterConfig *config
     }
     p->present_rect = glGetUniformLocation(p->present_program, "u_rect");
     p->present_gamma = glGetUniformLocation(p->present_program, "u_gamma");
+    if (p->fps_overlay) {
+        const GLuint fps_vs = compileShader(GL_VERTEX_SHADER, kFpsVertex, 0);
+        const GLuint fps_fs = compileShader(GL_FRAGMENT_SHADER, kFpsFragment, 0);
+        p->fps_program = (fps_vs && fps_fs) ? linkProgram(fps_vs, fps_fs, 0) : 0;
+        if (fps_vs) glDeleteShader(fps_vs);
+        if (fps_fs) glDeleteShader(fps_fs);
+        if (p->fps_program == 0) {
+            destroyEgl(p);
+            delete p;
+            return RECOMP_D3D_PRESENTER_HOST_FAILURE;
+        }
+        glGenVertexArrays(1, &p->fps_vao);
+        glGenBuffers(1, &p->fps_vbo);
+        glBindVertexArray(p->fps_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, p->fps_vbo);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+            reinterpret_cast<const void *>(2 * sizeof(float)));
+        glBindVertexArray(0);
+        p->fps_window_start = std::chrono::steady_clock::now();
+        rebuildFpsOverlay(p);
+        std::fprintf(stderr, "[gl] FPS overlay enabled\\n");
+    }
     glGenVertexArrays(1, &p->empty_vao);
 
     eglSwapInterval(p->display, 0);  // see gl_backend_set_immediate_present
@@ -1849,9 +2015,10 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
         auto &vdata = p->segment.vertex_data;
         const uint32_t v_size = draw.vertex_stride * draw.vertex_count;
         uint32_t v_offset;
-        auto seen = p->segment.vertex_seen.find(draw.vertex_bytes);
-        if (seen != p->segment.vertex_seen.end() && seen->second.first == v_size) {
-            v_offset = seen->second.second;
+        VertexSeenEntry *seen = findVertexSeenSlot(p->segment, draw.vertex_bytes);
+        if (seen != nullptr && seen->generation == p->segment.vertex_seen_generation &&
+            seen->bytes == draw.vertex_bytes && seen->size == v_size) {
+            v_offset = seen->offset;
             doa3_nx_counter_add(3, v_size);
         } else {
             v_offset = static_cast<uint32_t>(vdata.size());
@@ -1861,7 +2028,12 @@ RecompD3dPresenterError gl_backend_submit(RecompD3dPresenter *p, const RecompD3d
             }
             const auto *v_src = static_cast<const uint8_t *>(draw.vertex_bytes);
             vdata.insert(vdata.end(), v_src, v_src + v_size);
-            p->segment.vertex_seen[draw.vertex_bytes] = {v_size, v_offset};
+            if (seen != nullptr) {
+                seen->bytes = draw.vertex_bytes;
+                seen->size = v_size;
+                seen->offset = v_offset;
+                seen->generation = p->segment.vertex_seen_generation;
+            }
         }
 
         auto &idata = p->segment.index_data;

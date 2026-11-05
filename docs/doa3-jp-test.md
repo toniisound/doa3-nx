@@ -17,6 +17,8 @@ keeps `private/imported-disc` and `private/play-disc`.
 - `tools/doa3-jp/manual_functions.json` and `seed_functions.json`: the USA
   recipe moved to Japan addresses with Ghidra Version Tracking and BSim
   (session `DOA3-US-to-JP`).
+- `tools/doa3-jp/functions.json.gz`: the disassembly of the Japan XBE from
+  that seed list, which the build lifts from.
 - `program_forwards_jp.c` holds the Japan stubs and a Japan-to-USA table.
   `recomp_lookup_manual` translates through it, so USA-keyed adapters bind
   unchanged. Addresses outside the table get no adapter: three Japan functions

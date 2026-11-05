@@ -9,16 +9,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Official SDL3 VC build for the Windows input host; SDL3.dll is copied beside
-# each target that uses it.
+# Official SDL3 VC or MinGW build for the Windows input host; SDL3.dll is
+# copied beside each target that uses it.
 if(WIN32)
     if(POLICY CMP0135)
         cmake_policy(SET CMP0135 NEW)
     endif()
     include(FetchContent)
-    FetchContent_Declare(SDL3
-        URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-VC.zip
-        URL_HASH SHA256=1a784cb2a5c64d56fe7a62090fe9d242d9865f235e4ea9678f1a6ba4e693e7de)
+    if(MSVC)
+        FetchContent_Declare(SDL3
+            URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-VC.zip
+            URL_HASH SHA256=1a784cb2a5c64d56fe7a62090fe9d242d9865f235e4ea9678f1a6ba4e693e7de)
+    else()
+        FetchContent_Declare(SDL3
+            URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-mingw.zip
+            URL_HASH SHA256=9828bb735cf8a007bcf0ac5aa9f01f3fcb54b7ca67c932e775c905c5d5053a60)
+    endif()
     FetchContent_MakeAvailable(SDL3)
     find_package(SDL3 3.4 CONFIG REQUIRED PATHS "${sdl3_SOURCE_DIR}/cmake" NO_DEFAULT_PATH)
     function(recomp_use_sdl3 target)
@@ -102,6 +108,13 @@ if(NOT MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-ffp-contract=off>
         $<$<COMPILE_LANGUAGE:C,CXX>:-fno-strict-aliasing>
         $<$<COMPILE_LANGUAGE:C,CXX>:-fwrapv>)
+endif()
+# The guest sprintf adapter needs C99 printf, which a MinGW on msvcrt.dll
+# lacks. llvm-mingw targets Windows 7 by default; the port needs Windows 10.
+if(MINGW)
+    add_compile_definitions(__USE_MINGW_ANSI_STDIO=1 _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    # Link libc++ and libunwind in so the runner needs no toolchain DLLs.
+    add_link_options(-static)
 endif()
 
 if(NOT WIN32)
@@ -307,12 +320,15 @@ add_executable(recomp_runtime_test
 target_include_directories(recomp_runtime_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}")
 if(WIN32)
-    # Media Foundation is delay-loaded: Windows N editions and Server without the
-    # Media Foundation feature lack it, and custom music then stays disabled.
-    set(RECOMP_MEDIA_FOUNDATION mfplat mfreadwrite mfuuid ole32 delayimp)
-    set(RECOMP_MEDIA_FOUNDATION_DELAYLOAD /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll)
-    target_link_libraries(recomp_runtime_test PRIVATE ${RECOMP_MEDIA_FOUNDATION})
-    target_link_options(recomp_runtime_test PRIVATE ${RECOMP_MEDIA_FOUNDATION_DELAYLOAD})
+    # custom_music.cpp and its test load Media Foundation at run time: Windows N
+    # editions and Server without the Media Foundation feature lack it.
+    target_link_libraries(recomp_runtime_test PRIVATE mfuuid ole32)
+    if(MSVC)
+        set(RECOMP_XAUDIO2 xaudio2)
+    else()
+        # MinGW names the XAudio2 2.9 import library after its DLL.
+        set(RECOMP_XAUDIO2 xaudio2_9)
+    endif()
 else()
     target_sources(recomp_runtime_test PRIVATE win32_compat.c)
     if(RECOMP_FIBER_ASM)
@@ -695,8 +711,7 @@ if(RECOMP_PROGRAM_DIR)
         "${CMAKE_CURRENT_SOURCE_DIR}/../xbe")
     if(WIN32)
         target_link_libraries(recomp_program_runner PRIVATE
-            bcrypt dbghelp d3d11 d3dcompiler dxgi user32 shell32 ole32 uuid xaudio2 xapobase ${RECOMP_MEDIA_FOUNDATION} recomp_imgui)
-        target_link_options(recomp_program_runner PRIVATE ${RECOMP_MEDIA_FOUNDATION_DELAYLOAD})
+            bcrypt dbghelp d3d11 d3dcompiler dxgi user32 shell32 ole32 uuid ${RECOMP_XAUDIO2} mfuuid recomp_imgui)
         recomp_use_sdl3(recomp_program_runner)
     else()
         target_sources(recomp_program_runner PRIVATE win32_compat.c)
@@ -760,7 +775,7 @@ if(WIN32)
         d3d11 d3dcompiler dxgi user32 shell32 ole32 uuid recomp_imgui)
     add_executable(recomp_audio_output_xaudio2_test audio_output_xaudio2_test.cpp)
     add_executable(recomp_audio_capture_xapo_test audio_capture_xapo_test.cpp)
-    target_link_libraries(recomp_audio_capture_xapo_test PRIVATE xapobase)
+    target_link_libraries(recomp_audio_capture_xapo_test PRIVATE ole32)
     add_executable(recomp_input_host_test input_host_win32.c input_host_win32_test.c)
     target_link_libraries(recomp_input_host_test PRIVATE user32)
     recomp_use_sdl3(recomp_input_host_test)

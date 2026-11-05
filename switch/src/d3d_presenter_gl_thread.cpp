@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -233,10 +234,13 @@ void notePresent(PresenterThread &thread, double wait_ms)
     const double elapsed_ms = std::chrono::duration<double, std::milli>(now - thread.second_start).count();
     if (elapsed_ms < 1000.0) return;
     const uint32_t frames = thread.second_presents - 1u;
-    std::fprintf(stderr,
-        "recomp performance: present=%llu fps=%.2f frame_ms=%.3f max_ms=%.1f render_wait_ms=%.2f\n",
+    const char *show_fps = std::getenv("RECOMP_SHOW_FPS");
+    if (show_fps == nullptr || show_fps[0] != '0') {
+        std::fprintf(stderr,
+            "recomp performance: present=%llu fps=%.2f frame_ms=%.3f max_ms=%.1f render_wait_ms=%.2f\\n",
         static_cast<unsigned long long>(thread.presents), frames * 1000.0 / elapsed_ms,
         elapsed_ms / frames, thread.second_max_ms, thread.queue_wait_ms / frames);
+    }
     doa3_nx_profile_report(frames, elapsed_ms, -1);
     thread.second_presents = 1u;
     thread.second_start = now;

@@ -304,6 +304,13 @@ static int run_pinned(void)
     failed |= pinned("recomp_cos(1.0)", recomp_cos(1.0), 0x3fe14a280fb5068cULL);
     failed |= pinned("recomp_tan(1.0)", recomp_tan(1.0), 0x3ff8eb245cbee3a6ULL);
     failed |= pinned("recomp_sin(2^62)", recomp_sin(0x1p62), 0xbfe67e57355f0147ULL);
+    /* Argument reduction near multiples of pi and at huge inputs, where an
+       x87-based CRT is far off; MinGW checks these bits only through pins. */
+    failed |= pinned("recomp_sin(pi)", recomp_sin(0x1.921fb54442d18p+1), 0x3ca1a62633145c07ULL);
+    failed |= pinned("recomp_cos(pi/2)", recomp_cos(0x1.921fb54442d18p+0), 0x3c91a62633145c07ULL);
+    failed |= pinned("recomp_cos(2^62)", recomp_cos(0x1p62), 0xbfe6c2b1f820c708ULL);
+    failed |= pinned("recomp_sin(DBL_MAX)", recomp_sin(0x1.fffffffffffffp+1023), 0x3f7452fc98b34e97ULL);
+    failed |= pinned("recomp_cos(DBL_MAX)", recomp_cos(0x1.fffffffffffffp+1023), 0xbfefffe62ecfab75ULL);
     failed |= pinned("recomp_atan2(1, 2)", recomp_atan2(1.0, 2.0), 0x3fddac670561bb4fULL);
     failed |= pinned("recomp_atan2(-3, -4)", recomp_atan2(-3.0, -4.0), 0xc003fc176b7a8560ULL);
     failed |= pinned("recomp_log2(3)", recomp_log2(3.0), 0x3ff95c01a39fbd68ULL);
@@ -323,8 +330,13 @@ int main(void)
 {
     int failed = 0;
 
+#ifndef __MINGW32__
+    /* mingw-w64's sin and cos use x87 fsin and fcos, which lose accuracy near
+       multiples of pi and for large arguments. The port's bits match on every
+       build, the other hosts compare them, and the pinned values check them. */
     failed |= run_unary("recomp_sin", recomp_sin, sin, gen_trig, 0x1001u, 1);
     failed |= run_unary("recomp_cos", recomp_cos, cos, gen_trig, 0x1002u, 1);
+#endif
 #ifdef __APPLE__
     /* Apple's libm tan is up to 3 ulp from this port, which stays within 1 ulp
        of the MSVC CRT and glibc; the pinned bits below still check it exactly. */
